@@ -1,0 +1,25 @@
+{
+  "name": "qbads-blockchain-gateway",
+  "version": "1.0.0",
+  "description": "The two documented gateway points into the QBADS Fabric network (input: REST/SDK/gRPC, output: receipts/queries/events) that Middleware connects through.",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.2",
+    "@hyperledger/fabric-gateway": "^1.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  }
+}

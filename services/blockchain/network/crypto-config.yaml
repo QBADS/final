@@ -1,0 +1,44 @@
+# cryptogen config for the QBADS Fabric network.
+# Orgs mirror QBADS_Hyperledger_Fabric_Architecture.pdf Section 2:
+# Organization A/B (Bank), Organization C (Financial Institution), Organization D (Regulator).
+OrdererOrgs:
+  - Name: Orderer
+    Domain: qbads.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer1
+      - Hostname: orderer2
+      - Hostname: orderer3
+
+PeerOrgs:
+  - Name: BankA
+    Domain: banka.qbads.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 1
+
+  - Name: BankB
+    Domain: bankb.qbads.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 1
+
+  - Name: InstitutionC
+    Domain: institutionc.qbads.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 1
+
+  - Name: RegulatorD
+    Domain: regulatord.qbads.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 1

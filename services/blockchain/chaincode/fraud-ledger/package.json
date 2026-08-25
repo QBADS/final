@@ -1,0 +1,21 @@
+{
+  "name": "fraud-ledger-chaincode",
+  "version": "1.0.0",
+  "description": "QBADS Fabric smart contract layer: transaction intake, fraud decision write-back, duplicate detection, audit trail.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "fabric-chaincode-node start"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "fabric-contract-api": "^2.5.4",
+    "fabric-shim": "^2.5.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^20.0.0"
+  }
+}

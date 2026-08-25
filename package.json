@@ -1,0 +1,14 @@
+{
+  "name": "qbads",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Quantum Blockchain Anomaly Detection System - monorepo",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:company": "npm run dev --workspace=company-dashboard",
+    "dev:node": "npm run dev --workspace=node-dashboard",
+    "build": "npm run build --workspace=company-dashboard && npm run build --workspace=node-dashboard"
+  }
+}

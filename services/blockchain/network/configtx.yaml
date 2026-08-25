@@ -1,0 +1,215 @@
+---
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: crypto-config/ordererOrganizations/qbads.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer1.qbads.com:7050
+      - orderer2.qbads.com:7050
+      - orderer3.qbads.com:7050
+
+  - &BankA
+    Name: BankAMSP
+    ID: BankAMSP
+    MSPDir: crypto-config/peerOrganizations/banka.qbads.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('BankAMSP.admin','BankAMSP.peer','BankAMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('BankAMSP.admin','BankAMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('BankAMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('BankAMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.banka.qbads.com
+        Port: 7051
+
+  - &BankB
+    Name: BankBMSP
+    ID: BankBMSP
+    MSPDir: crypto-config/peerOrganizations/bankb.qbads.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('BankBMSP.admin','BankBMSP.peer','BankBMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('BankBMSP.admin','BankBMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('BankBMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('BankBMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.bankb.qbads.com
+        Port: 7051
+
+  - &InstitutionC
+    Name: InstitutionCMSP
+    ID: InstitutionCMSP
+    MSPDir: crypto-config/peerOrganizations/institutionc.qbads.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('InstitutionCMSP.admin','InstitutionCMSP.peer','InstitutionCMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('InstitutionCMSP.admin','InstitutionCMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('InstitutionCMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('InstitutionCMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.institutionc.qbads.com
+        Port: 7051
+
+  - &RegulatorD
+    Name: RegulatorDMSP
+    ID: RegulatorDMSP
+    MSPDir: crypto-config/peerOrganizations/regulatord.qbads.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('RegulatorDMSP.admin','RegulatorDMSP.peer','RegulatorDMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('RegulatorDMSP.admin','RegulatorDMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('RegulatorDMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('RegulatorDMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.regulatord.qbads.com
+        Port: 7051
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_5: true
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer1.qbads.com:7050
+    - orderer2.qbads.com:7050
+    - orderer3.qbads.com:7050
+  EtcdRaft:
+    Consenters:
+      - Host: orderer1.qbads.com
+        Port: 7050
+        ClientTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer1.qbads.com/tls/server.crt
+        ServerTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer1.qbads.com/tls/server.crt
+      - Host: orderer2.qbads.com
+        Port: 7050
+        ClientTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer2.qbads.com/tls/server.crt
+        ServerTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer2.qbads.com/tls/server.crt
+      - Host: orderer3.qbads.com
+        Port: 7050
+        ClientTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer3.qbads.com/tls/server.crt
+        ServerTLSCert: crypto-config/ordererOrganizations/qbads.com/orderers/orderer3.qbads.com/tls/server.crt
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 100
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Profiles:
+  QBADSOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Consortiums:
+      QBADSConsortium:
+        Organizations:
+          - *BankA
+          - *BankB
+          - *InstitutionC
+          - *RegulatorD
+
+  QBADSChannel:
+    <<: *ChannelDefaults
+    Consortium: QBADSConsortium
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *BankA
+        - *BankB
+        - *InstitutionC
+        - *RegulatorD
