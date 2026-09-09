@@ -22,6 +22,8 @@ export interface PipelineOutcome {
   warnings: string[];
   qubitCost: number;
   dimensionalityReduced: boolean;
+  /** Stage 1's cleaned/imputed record - every one of the 30 fields has a concrete value. */
+  record: RawTransactionInput;
 }
 
 function scoreToDecision(score: number): "SAFE" | "REVIEW" | "FRAUD" {
@@ -57,7 +59,13 @@ export async function runFraudDetectionPipeline(
       pipelineLatencyMs: Date.now() - start,
     };
 
-    return { decision, warnings: stage1.warnings, qubitCost: stage2.qubitCost, dimensionalityReduced: stage2.dimensionalityReduced };
+    return {
+      decision,
+      warnings: stage1.warnings,
+      qubitCost: stage2.qubitCost,
+      dimensionalityReduced: stage2.dimensionalityReduced,
+      record,
+    };
   } catch (err) {
     // Quantum Model API timed out or is unavailable - never block the
     // transaction, fall through to the deterministic classical path.
@@ -81,6 +89,7 @@ export async function runFraudDetectionPipeline(
       warnings: [...stage1.warnings, `quantum model unavailable (${(err as Error).message}), used classical fallback`],
       qubitCost: stage2.qubitCost,
       dimensionalityReduced: stage2.dimensionalityReduced,
+      record,
     };
   }
 }

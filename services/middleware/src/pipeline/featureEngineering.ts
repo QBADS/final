@@ -25,20 +25,53 @@ export interface FieldConfig {
   vocab?: string[];
 }
 
+// The full 30 core attributes from Quantum_Ready_Feature_Pipeline_Stage1_Stage2.pdf,
+// across its six documented categories (5 fields each): transaction
+// details, customer behavior, device signals, location signals,
+// authentication signals, merchant/risk indicators. Field names match
+// domainTypes.ts's RawTransactionInput/StoredTransaction 1:1.
 export const FIELD_CONFIG: Record<string, FieldConfig> = {
+  // -- Transaction details --
   amount: { type: "continuous", required: true, min: 0, max: 50_000, imputeDefault: 100 },
+  currency: { type: "categorical_low", required: true, vocab: ["USD", "EUR", "GBP", "JPY", "CAD"] },
+  paymentChannel: { type: "categorical_low", required: true, vocab: ["card", "bank_transfer", "wallet", "crypto"] },
+  merchantCategory: { type: "categorical_high", required: false },
+  submittedAt: { type: "timestamp", required: false },
+
+  // -- Customer behavior --
   accountAgeDays: { type: "continuous", required: false, min: 0, max: 10_000, imputeDefault: 365 },
   sessionDurationSec: { type: "continuous", required: false, min: 0, max: 3_600, imputeDefault: 120 },
-  paymentChannel: { type: "categorical_low", required: true, vocab: ["card", "bank_transfer", "wallet", "crypto"] },
-  loginMethod: { type: "categorical_low", required: false, vocab: ["password", "biometric", "otp", "sso"] },
+  avgTransactionAmount30d: { type: "continuous", required: false, min: 0, max: 50_000, imputeDefault: 100 },
+  transactionVelocity1h: { type: "continuous", required: false, min: 0, max: 100, imputeDefault: 1 },
+  daysSinceLastTransaction: { type: "continuous", required: false, min: 0, max: 3_650, imputeDefault: 30 },
+
+  // -- Device signals --
   deviceType: { type: "categorical_low", required: false, vocab: ["mobile", "desktop", "tablet"] },
-  merchantCategory: { type: "categorical_high", required: false },
-  crossBorderFlag: { type: "binary", required: false },
   newDeviceFlag: { type: "binary", required: false },
-  mfaUsed: { type: "binary", required: false },
   deviceId: { type: "hashed", required: false },
+  browserFingerprint: { type: "hashed", required: false },
+  deviceTrustScore: { type: "continuous", required: false, min: 0, max: 100, imputeDefault: 70 },
+
+  // -- Location signals --
   ipAddress: { type: "hashed", required: false },
-  submittedAt: { type: "timestamp", required: false },
+  crossBorderFlag: { type: "binary", required: false },
+  country: { type: "categorical_high", required: false },
+  distanceFromHomeKm: { type: "continuous", required: false, min: 0, max: 20_000, imputeDefault: 10 },
+  vpnOrProxyFlag: { type: "binary", required: false },
+
+  // -- Authentication signals --
+  loginMethod: { type: "categorical_low", required: false, vocab: ["password", "biometric", "otp", "sso"] },
+  mfaUsed: { type: "binary", required: false },
+  authFailureCount24h: { type: "continuous", required: false, min: 0, max: 50, imputeDefault: 0 },
+  passwordAgeDays: { type: "continuous", required: false, min: 0, max: 3_650, imputeDefault: 180 },
+  biometricMatchScore: { type: "continuous", required: false, min: 0, max: 100, imputeDefault: 80 },
+
+  // -- Merchant / risk indicators --
+  merchantId: { type: "hashed", required: false },
+  merchantRiskScore: { type: "continuous", required: false, min: 0, max: 100, imputeDefault: 20 },
+  chargebackHistory: { type: "continuous", required: false, min: 0, max: 50, imputeDefault: 0 },
+  isHighRiskMerchantCategory: { type: "binary", required: false },
+  cardPresentFlag: { type: "binary", required: false },
 };
 
 export interface Stage1Result {
@@ -97,8 +130,20 @@ function cleanAndImpute(classified: ClassifiedField[], warnings: string[]): Clas
       warnings.push(`${field.name} missing, using "unknown" category`);
       return { ...field, rawValue: "unknown" };
     }
+    if (cfg.type === "categorical_high" && (field.rawValue === undefined || field.rawValue === null || field.rawValue === "")) {
+      warnings.push(`${field.name} missing, using "unknown" category`);
+      return { ...field, rawValue: "unknown" };
+    }
     if (cfg.type === "binary" && field.rawValue === undefined) {
       return { ...field, rawValue: false };
+    }
+    if (cfg.type === "hashed" && (field.rawValue === undefined || field.rawValue === null || field.rawValue === "")) {
+      warnings.push(`${field.name} missing, using "unknown" identifier`);
+      return { ...field, rawValue: "unknown" };
+    }
+    if (cfg.type === "timestamp" && (field.rawValue === undefined || field.rawValue === null || field.rawValue === "")) {
+      warnings.push(`${field.name} missing, defaulted to current time`);
+      return { ...field, rawValue: new Date().toISOString() };
     }
     return field;
   });
@@ -187,12 +232,36 @@ function normalize(classified: ClassifiedField[]): NormalizedFeature[] {
   });
 }
 
+/**
+ * Flattens Stage 1's cleaned/imputed classified fields back into a plain
+ * record - every one of the 30 fields has a concrete value at this point
+ * (see cleanAndImpute above), which is what lets nodeApi.ts build a
+ * complete StoredTransaction/decision input straight from Stage 1's output
+ * rather than re-reading the raw (possibly missing) request body.
+ */
+export function classifiedToRecord(classified: ClassifiedField[]): Record<string, unknown> {
+  const record: Record<string, unknown> = {};
+  for (const field of classified) {
+    record[field.name] = field.rawValue;
+  }
+  return record;
+}
+
 export function runStage1(rawBody: Record<string, unknown>): Stage1Result {
   const warnings = validate(rawBody);
   const classified = cleanAndImpute(classify(rawBody), warnings);
   const normalized = normalize(classified);
+  // The "record" downstream stages/consumers see is the imputed/cleaned
+  // version (every field has a concrete value), not the possibly-partial
+  // raw request body - classicalRuleEngine.ts and blockchainClient.ts read
+  // straight off it and must never see `undefined` for an optional field.
+  const record = {
+    ...classifiedToRecord(classified),
+    txId: rawBody.txId,
+    institutionId: rawBody.institutionId,
+  } as unknown as RawTransactionInput;
   return {
-    record: rawBody as unknown as RawTransactionInput,
+    record,
     classified,
     normalized,
     warnings,

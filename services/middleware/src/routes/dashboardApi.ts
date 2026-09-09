@@ -5,6 +5,7 @@ import { getBlockchainHealth, getQuantumEngineHealth, getQuantumEngineModels } f
 import { requestMetricsSnapshot } from "../metrics";
 import { config } from "../config";
 import { FIELD_CONFIG } from "../pipeline/featureEngineering";
+import { pcaStatus } from "../pipeline/pcaReducer";
 import type { FraudDecisionRecord, Institution, StoredTransaction } from "../domainTypes";
 
 // The Dashboard API is unauthenticated (see note below) - never leak the
@@ -269,6 +270,15 @@ dashboardApiRouter.get("/feature-pipeline", (_req, res) => {
     fields: Object.entries(FIELD_CONFIG).map(([name, cfg]) => ({ name, ...cfg })),
     recentWarnings: store.pipelineWarnings,
   });
+});
+
+// Stage 2.1's real-PCA state - sample buffer fill level and whether the
+// dimensionality-reduction path currently uses a fitted PCA model or is
+// still in cold-start fallback (pipeline/pcaReducer.ts). Lightweight and
+// genuinely useful for observability, so it stays rather than being
+// scaffolding-only.
+dashboardApiRouter.get("/pca-status", (_req, res) => {
+  res.json(pcaStatus());
 });
 
 // Risk events / live feed, streamed to the dashboards as SSE.

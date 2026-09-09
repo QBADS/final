@@ -19,13 +19,21 @@ src/
   auth.ts                              Node API key auth
   server.ts                           API Gateway: mounts Node API + Dashboard API
   store/inMemoryStore.ts       institutions, transactions, decisions, feedback, live feed, auth/pipeline events
+  streaming/
+    types.ts, inProcessBroker.ts, kafkaBroker.ts, index.ts   Kafka-compatible pub/sub (real kafkajs
+                                                              when KAFKA_BROKERS is set, in-process
+                                                              fallback otherwise - same interface)
+    pendingResults.ts           correlates a published message with its subscriber's result
+    transactionConsumer.ts    subscriber: consumes qbads.transactions.raw, runs the full pipeline
   pipeline/
     featureEngineering.ts        Stage 1: validate, classify, clean/impute, normalize
     vectorStandardization.ts   Stage 2: dimensionality reduction, quantum encoding, assembly
+    pca.ts, pcaReducer.ts        real PCA (Jacobi eigen-decomposition) + rolling sample buffer for 2.1
     quantumOrchestrationClient.ts    retries/timeout + mock QSVM/QNN/VQC client
     responseInterpretation.ts   calibrates a successful quantum response against classical rules
     classicalRuleEngine.ts        deterministic fallback (SAFE/REVIEW/HOLD)
     decisionEngine.ts               ties Stage 1 -> Stage 2 -> quantum-or-fallback -> thresholds
+    transactionIngestion.ts   output-routing: persist tx/decision, live feed, blockchain write-back
     federatedLearning.ts            feedback aggregation
   integrations/
     blockchainClient.ts             best-effort calls to services/blockchain/gateway
@@ -46,6 +54,12 @@ npm run build && npm start   # :4000
 curl -X POST localhost:4000/api/node/transactions \
   -H "x-api-key: qbads_sandbox_novafintech" -H "content-type: application/json" \
   -d '{"amount":42000,"currency":"USD","accountAgeDays":2,"paymentChannel":"crypto","crossBorderFlag":true,"newDeviceFlag":true,"mfaUsed":false}'
+# any of the other 24 fields (merchantId, deviceTrustScore, country, ...) are optional -
+# Stage 1 imputes sane defaults for whatever's missing.
+
+curl -X POST localhost:4000/api/node/transactions/batch \
+  -H "x-api-key: qbads_sandbox_novafintech" -H "content-type: application/json" \
+  -d '{"transactions":[{"amount":120,"currency":"USD","paymentChannel":"card"},{"amount":9000,"currency":"USD","paymentChannel":"crypto","crossBorderFlag":true}]}'
 
 curl localhost:4000/api/dashboard/kpis
 curl localhost:4000/api/dashboard/institutions
@@ -78,7 +92,7 @@ unauthenticated - see "Not done here."
 | Node API auth, ingest, query, feedback | Real |
 | Stage 1 feature engineering (validate/classify/impute/normalize) | Real, per the doc's 1.2-1.5 |
 | Stage 2 vector standardization (encoding, assembly) | Real, per the doc's 2.2-2.3 |
-| Stage 2 dimensionality reduction (2.1) | Placeholder - collapses low-priority feature groups when over the qubit budget; **not real PCA**, which needs a covariance matrix fitted on historical data that doesn't exist yet |
+| Stage 2 dimensionality reduction (2.1) | Real PCA (`pipeline/pca.ts`: covariance matrix + Jacobi eigen-decomposition + top-K projection) once a rolling sample buffer has >=30 observations (`pipeline/pcaReducer.ts`); applied selectively to the non-core fields only (core risk fields - amount, crossBorderFlag, newDeviceFlag, mfaUsed, merchantCategory - are never PCA'd). Cold start (fewer than 30 samples) falls back to a documented chunked-average placeholder so the system still works from the first transaction. `GET /api/dashboard/pca-status` reports sample-buffer fill and whether real PCA is currently active. |
 | Quantum orchestration (retries, timeout) | Real |
 | Quantum inference itself | Real by default (`HttpQuantumModelClient` calls `services/quantum-pipeline`) - `MockQuantumModelClient` (heuristic scorer, same interface) is still there behind `QUANTUM_CLIENT_MODE=mock` for local dev without Python running |
 | Response interpretation, classical fallback, decision engine | Real |
@@ -93,11 +107,6 @@ unauthenticated - see "Not done here."
 
 ## Not done here
 
-- A proper 30-field transaction schema - the feature-pipeline doc references
-  "the 30 core attributes defined earlier" without listing them, so
-  `RawTransactionInput` is a representative schema spanning every documented
-  data type (continuous, categorical low/high-cardinality, binary, hashed,
-  timestamp), not the literal 30 fields.
 - Persistent storage (everything resets on restart - including the request
   metrics `metrics.ts` reports and the transactions `platform-health`/`kpis`
   are computed from).

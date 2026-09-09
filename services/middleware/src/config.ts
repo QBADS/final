@@ -31,4 +31,21 @@ export const config = {
   // "deterministic under failure" principle.
   blockchainGatewayUrl: process.env.BLOCKCHAIN_GATEWAY_URL ?? "http://localhost:4001",
   blockchainWriteEnabled: (process.env.BLOCKCHAIN_WRITE_ENABLED ?? "true") === "true",
+
+  // Streaming platform (system architecture doc: "API gateway -> Streaming
+  // platform (Kafka real-time ingestion) -> Validation & cleaning ->
+  // Feature engineering"). Comma-separated broker list, e.g.
+  // "kafka1:9092,kafka2:9092" - when unset, streaming/index.ts falls back
+  // to the in-process broker (same interface) so the system still runs
+  // end-to-end with no external Kafka cluster.
+  kafkaBrokers: (process.env.KAFKA_BROKERS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  // How long the Node API's HTTP handler waits for the streaming
+  // subscriber (streaming/transactionConsumer.ts) to finish processing a
+  // published transaction before giving up - covers Stage 1/2 + quantum
+  // orchestration's own timeout/retries + decisioning + storage.
+  streamingResponseTimeoutMs: Number(process.env.STREAMING_RESPONSE_TIMEOUT_MS ?? 15_000),
 };
