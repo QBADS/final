@@ -2,7 +2,7 @@
 Config for the Quantum Engine service (Quantum_Engine_Base_Architecture.pdf).
 
 FEATURE_DIMENSION must match services/middleware's QUBIT_BUDGET env var
-(default 16, see services/middleware/src/config.ts) - Middleware's Stage 2
+(default 8, see services/middleware/src/config.ts) - Middleware's Stage 2
 (vectorStandardization.ts) pads/truncates every feature vector to exactly
 that length before calling this engine, because the circuits below are
 built once for a fixed number of qubits, not reconstructed per request.

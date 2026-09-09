@@ -130,6 +130,10 @@ def deploy(request: DeployRequest):
 def recalibrate(request: RecalibrateRequest):
     cal_map = CalibrationMap(method=request.method, version=request.calibrationVersion, params=request.params)
     try:
+        cal_map.apply(0.5)  # dry-run: fail fast on malformed/missing params instead of on a later /infer call
+    except (KeyError, ValueError, TypeError) as err:
+        raise HTTPException(status_code=422, detail=f"invalid calibration params for method {request.method!r}: {err}") from err
+    try:
         registry.set_calibration(request.modelType, request.version, cal_map)
     except (KeyError, ValueError) as err:
         raise HTTPException(status_code=422, detail=str(err)) from err

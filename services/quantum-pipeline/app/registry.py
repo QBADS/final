@@ -77,7 +77,10 @@ class ModelRegistry:
         if model_type not in self._models:
             raise KeyError(f"unknown model type {model_type!r}")
 
-        artifact_path = TRAINING_PIPELINE_REGISTRY_DIR / artifact_relative_path
+        artifact_path = (TRAINING_PIPELINE_REGISTRY_DIR / artifact_relative_path).resolve()
+        registry_root = TRAINING_PIPELINE_REGISTRY_DIR.resolve()
+        if registry_root not in artifact_path.parents and artifact_path != registry_root:
+            raise FileNotFoundError(f"artifact path escapes registry directory: {artifact_relative_path!r}")
         if not artifact_path.exists():
             raise FileNotFoundError(f"artifact not found: {artifact_path}")
 
