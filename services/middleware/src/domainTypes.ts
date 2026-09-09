@@ -7,30 +7,57 @@
  */
 
 // ---- Raw input (Node API) ----
-// Representative schema covering the six attribute categories described in
-// Quantum_Ready_Feature_Pipeline_Stage1_Stage2.pdf (transaction details,
-// customer behavior, device signals, location signals, authentication
-// signals, merchant/risk indicators). The doc references "the 30 core
-// attributes defined earlier" without listing them, so this is a
-// representative subset spanning every documented data type, not the
-// literal 30 fields.
+// The full 30 core attributes from Quantum_Ready_Feature_Pipeline_Stage1_Stage2.pdf,
+// across its six attribute categories. Field names here are byte-identical
+// to packages/types/src/fraud.ts's TransactionDetails - the wire format
+// crossing the Dashboard API boundary - specifically to avoid the kind of
+// txId-style name drift between the backend and frontend contracts that has
+// been a real bug class in this codebase before.
 export interface RawTransactionInput {
   txId?: string;
   institutionId: string;
+
+  // -- Transaction details --
   amount: number;
   currency: string;
+  paymentChannel: "card" | "bank_transfer" | "wallet" | "crypto";
+  merchantCategory: string; // high-cardinality categorical
+  submittedAt: string; // ISO timestamp
+
+  // -- Customer behavior --
   accountAgeDays: number;
   sessionDurationSec: number;
-  paymentChannel: "card" | "bank_transfer" | "wallet" | "crypto";
-  loginMethod: "password" | "biometric" | "otp" | "sso";
+  avgTransactionAmount30d: number;
+  transactionVelocity1h: number; // count of transactions by this customer in the last hour
+  daysSinceLastTransaction: number;
+
+  // -- Device signals --
   deviceType: "mobile" | "desktop" | "tablet";
-  merchantCategory: string; // high-cardinality categorical
-  crossBorderFlag: boolean;
   newDeviceFlag: boolean;
-  mfaUsed: boolean;
   deviceId: string; // hashed identifier
+  browserFingerprint: string; // hashed identifier
+  deviceTrustScore: number; // 0-100, higher = more trusted device history
+
+  // -- Location signals --
   ipAddress: string; // hashed identifier
-  submittedAt: string; // ISO timestamp
+  crossBorderFlag: boolean;
+  country: string; // high-cardinality categorical (ISO country code)
+  distanceFromHomeKm: number;
+  vpnOrProxyFlag: boolean;
+
+  // -- Authentication signals --
+  loginMethod: "password" | "biometric" | "otp" | "sso";
+  mfaUsed: boolean;
+  authFailureCount24h: number;
+  passwordAgeDays: number;
+  biometricMatchScore: number; // 0-100
+
+  // -- Merchant / risk indicators --
+  merchantId: string; // hashed identifier
+  merchantRiskScore: number; // 0-100, precomputed merchant risk from prior history
+  chargebackHistory: number; // count of prior chargebacks on this merchant/customer pair
+  isHighRiskMerchantCategory: boolean;
+  cardPresentFlag: boolean;
 }
 
 export type FeatureType = "continuous" | "categorical_low" | "categorical_high" | "binary" | "hashed" | "timestamp";
@@ -87,14 +114,30 @@ export interface FraudDecisionRecord {
   decisionHash?: string;
   /** Wall-clock time for Stage 1/2 + quantum-or-fallback + decisioning, measured in nodeApi.ts. */
   pipelineLatencyMs: number;
+
+  // ---- Ensemble transparency (pipeline/ensembleEngine.ts) ----
+  // Populated only on the quantum-success path (source === "quantum_model"),
+  // where riskScore is a genuine weighted blend of these two component
+  // scores rather than the quantum score alone - undefined on the
+  // classical-fallback path, which has no ensemble (classicalRuleEngine.ts
+  // runs alone there). Exposed for audit-trail/dashboard transparency into
+  // what actually produced riskScore.
+  /** The quantum model's own 0-100 component score before ensembling. */
+  quantumComponentScore?: number;
+  /** The classical ML model's (classicalMlModel.ts) 0-100 component score before ensembling. */
+  classicalMlComponentScore?: number;
+  /** The classical ML model's own 0-1 confidence in classicalMlComponentScore. */
+  classicalMlConfidence?: number;
+  /** The weights actually used to blend the two component scores into riskScore. */
+  ensembleWeights?: { quantum: number; classicalMl: number };
 }
 
-export interface StoredTransaction {
+// Post-Stage1 (validated/imputed) transaction, as actually persisted and
+// served back over the Dashboard API. Same 30 attributes as
+// RawTransactionInput - every field has a concrete value by this point,
+// missing ones having gone through Stage 1's imputation/defaulting.
+export interface StoredTransaction extends Omit<RawTransactionInput, "txId"> {
   txId: string;
-  institutionId: string;
-  amount: number;
-  currency: string;
-  submittedAt: string;
   chainConfirmed: boolean;
 }
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { NormalizedFeature, QuantumEncodedFeature, QuantumReadyVector } from "../domainTypes";
 import { config } from "../config";
+import { reduceWithPCA } from "./pcaReducer";
 
 /**
  * Stage 2 of Quantum_Ready_Feature_Pipeline_Stage1_Stage2.pdf: dimensionality
@@ -45,62 +46,81 @@ function totalQubitCost(features: QuantumEncodedFeature[]): number {
 }
 
 /**
- * 2.1 Dimensionality reduction. Real PCA needs a covariance matrix fitted on
- * historical data, which doesn't exist yet for a from-scratch service - this
- * is a documented placeholder: multi-value, lower-explainability-priority
- * groups (one-hot categoricals, hashed embeddings, cyclical timestamps) get
- * collapsed to a single averaged component and re-tagged amplitude, rather
- * than dropped. Core risk fields (amount, flags) are never touched, per the
- * doc's note that PCA is applied "selectively... to preserve explainability
- * where regulators require it."
- *
- * Per the doc's 2.1: "If total qubit cost still exceeds budget after
- * assignment, excess features route back through dimensionality reduction."
- * A single per-field collapse pass isn't always enough (e.g. the default
- * 13-field schema still costs 13 qubits against an 8-qubit budget after pass
- * one) - previously that residual overflow was left for padOrTruncate below
- * to silently truncate, which dropped whole low-index-order features
- * (mfaUsed, deviceId, ipAddress, newDeviceFlag, submittedAt) from the vector
- * actually sent to the quantum engine. Instead, route the excess back
- * through a second reduction pass: merge the remaining low-priority,
- * already-collapsed features into one shared amplitude component. Core risk
- * fields (continuous numerics, binary flags, merchantCategory) are still
- * never touched.
+ * "Core" fields: the handful of highest-signal, most-scrutinized attributes
+ * regulators/analysts actually look at (this exact set is also what
+ * quantumOrchestrationClient.ts's mock scorer weights by name). These are
+ * never PCA-reduced, per the doc's "applied selectively... to preserve
+ * explainability where regulators require it" - every other one of the 30
+ * fields goes through PCA below.
  */
-function reduceDimensionality(features: QuantumEncodedFeature[]): { features: QuantumEncodedFeature[]; reduced: boolean } {
+const CORE_FIELD_NAMES = new Set(["amount", "crossBorderFlag", "newDeviceFlag", "mfaUsed", "merchantCategory"]);
+
+/** Max number of amplitude-packed PCA components that fit in `qubits` qubits (inverse of the amplitude cost formula). */
+function maxComponentsForQubits(qubits: number): number {
+  return Math.max(1, Math.pow(2, Math.max(qubits, 0)) - 1);
+}
+
+/**
+ * 2.1 Dimensionality reduction - real PCA (pca.ts/pcaReducer.ts): center the
+ * data, compute the covariance matrix, get eigenvectors via the Jacobi
+ * eigenvalue algorithm, and project onto the top-K components. Applied
+ * *selectively*: CORE_FIELD_NAMES above are always kept as individual
+ * angle/basis-encoded qubits; every other field's normalized values are
+ * concatenated into one vector and PCA-reduced together into a single
+ * amplitude-encoded feature, sized to whatever qubit budget remains after
+ * the core fields.
+ *
+ * Overflow-recovery loop (doc 2.1: "if the total qubit cost across all
+ * assigned encodings still exceeds the available budget, the excess
+ * features are routed back through dimensionality reduction before a final
+ * encoding assignment"): if core-cost + PCA-group-cost still exceeds the
+ * budget (e.g. a misconfigured very low QUBIT_BUDGET), the PCA component
+ * count is iteratively shrunk by one and the vector re-projected/re-packed
+ * - never simply truncated by padOrTruncate below, which was the bug fixed
+ * in the prior audit (whole trailing features silently dropped from the
+ * vector actually sent to the quantum engine). The PCA group is only ever
+ * shrunk, never removed outright, so every one of the 30 fields still
+ * contributes to the final vector via the group's principal components.
+ */
+function reduceDimensionality(features: QuantumEncodedFeature[]): {
+  features: QuantumEncodedFeature[];
+  reduced: boolean;
+  usedRealPCA: boolean;
+} {
   if (totalQubitCost(features) <= config.qubitBudget) {
-    return { features, reduced: false };
+    return { features, reduced: false, usedRealPCA: false };
   }
 
-  const reducibleTypes = new Set<string>(["categorical_low", "hashed", "timestamp"]);
+  const core = features.filter((f) => CORE_FIELD_NAMES.has(f.name));
+  const reducible = features.filter((f) => !CORE_FIELD_NAMES.has(f.name));
+  const coreCost = totalQubitCost(core);
 
-  // Pass 1: collapse each multi-value low-priority field to a single
-  // averaged component.
-  let current = features.map((f): QuantumEncodedFeature => {
-    if (!reducibleTypes.has(f.type) || f.values.length <= 1) return f;
-    const avg = f.values.reduce((a, b) => a + b, 0) / f.values.length;
-    return { ...f, values: [avg], encoding: "amplitude" };
-  });
+  // Flatten the whole non-core group into one vector, in stable field order
+  // (features arrives in FIELD_CONFIG's fixed insertion order), so nothing
+  // from any of the 30 fields is left out of the PCA input.
+  const reducibleVector = reducible.flatMap((f) => f.values);
 
-  // Pass 2 (route-back): if still over budget, merge the now-single-value
-  // low-priority fields into one shared amplitude feature instead of
-  // letting padOrTruncate below cut whole features off the end of the
-  // vector.
-  if (totalQubitCost(current) > config.qubitBudget) {
-    const mergeable = current.filter((f) => reducibleTypes.has(f.type));
-    const kept = current.filter((f) => !reducibleTypes.has(f.type));
-    if (mergeable.length > 1) {
-      const merged: QuantumEncodedFeature = {
-        name: "reduced_group",
-        type: "categorical_high",
-        values: [mergeable.reduce((sum, f) => sum + (f.values[0] ?? 0), 0) / mergeable.length],
-        encoding: "amplitude",
-      };
-      current = [...kept, merged];
-    }
+  let targetQubits = Math.max(config.qubitBudget - coreCost, 1);
+  let componentCount = Math.min(maxComponentsForQubits(targetQubits), reducibleVector.length);
+
+  let { values, usedRealPCA } = reduceWithPCA(reducibleVector, componentCount);
+  let mergedFeature: QuantumEncodedFeature = {
+    name: "pca_reduced_group",
+    type: "categorical_high",
+    values,
+    encoding: "amplitude",
+  };
+  let assembled = [...core, mergedFeature];
+
+  // Overflow-recovery: shrink the PCA group further (never drop it, never
+  // let padOrTruncate silently cut features) until it fits, or there's
+  // nothing left to shrink.
+  while (totalQubitCost(assembled) > config.qubitBudget && mergedFeature.values.length > 1) {
+    mergedFeature = { ...mergedFeature, values: mergedFeature.values.slice(0, mergedFeature.values.length - 1) };
+    assembled = [...core, mergedFeature];
   }
 
-  return { features: current, reduced: true };
+  return { features: assembled, reduced: true, usedRealPCA };
 }
 
 /**
@@ -109,7 +129,11 @@ function reduceDimensionality(features: QuantumEncodedFeature[]): { features: Qu
  * base architecture (Quantum_Engine_Base_Architecture.pdf, Section 05, step
  * 1 "Dimension Check") expects a fixed-length vector of length N - its
  * circuits are built once for N qubits, not reconstructed per request - so
- * this is a hard requirement, not a nice-to-have.
+ * this is a hard requirement, not a nice-to-have. By the time we get here,
+ * reduceDimensionality above has already brought the *encoded feature*
+ * count within budget for any realistic schema/budget combination, so this
+ * is just a final safety net (e.g. an extreme/misconfigured qubit budget),
+ * not where reduction actually happens.
  */
 function padOrTruncate(values: number[], length: number): number[] {
   if (values.length === length) return values;
@@ -119,12 +143,17 @@ function padOrTruncate(values: number[], length: number): number[] {
 
 export function runStage2(recordId: string, normalized: NormalizedFeature[]): QuantumReadyVector {
   const encoded = encode(normalized);
-  const { features, reduced } = reduceDimensionality(encoded);
+  const { features, reduced, usedRealPCA } = reduceDimensionality(encoded);
   const finalCost = totalQubitCost(features);
 
   if (finalCost > config.qubitBudget) {
     console.warn(
       `[vectorStandardization] qubit cost ${finalCost} still exceeds budget ${config.qubitBudget} after dimensionality reduction for record ${recordId}`,
+    );
+  }
+  if (reduced) {
+    console.log(
+      `[vectorStandardization] record ${recordId}: dimensionality-reduced (${usedRealPCA ? "real PCA" : "cold-start fallback"}), qubit cost ${finalCost}/${config.qubitBudget}`,
     );
   }
 

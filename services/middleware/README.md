@@ -19,13 +19,21 @@ src/
   auth.ts                              Node API key auth
   server.ts                           API Gateway: mounts Node API + Dashboard API
   store/inMemoryStore.ts       institutions, transactions, decisions, feedback, live feed, auth/pipeline events
+  streaming/
+    types.ts, inProcessBroker.ts, kafkaBroker.ts, index.ts   Kafka-compatible pub/sub (real kafkajs
+                                                              when KAFKA_BROKERS is set, in-process
+                                                              fallback otherwise - same interface)
+    pendingResults.ts           correlates a published message with its subscriber's result
+    transactionConsumer.ts    subscriber: consumes qbads.transactions.raw, runs the full pipeline
   pipeline/
     featureEngineering.ts        Stage 1: validate, classify, clean/impute, normalize
     vectorStandardization.ts   Stage 2: dimensionality reduction, quantum encoding, assembly
+    pca.ts, pcaReducer.ts        real PCA (Jacobi eigen-decomposition) + rolling sample buffer for 2.1
     quantumOrchestrationClient.ts    retries/timeout + mock QSVM/QNN/VQC client
     responseInterpretation.ts   calibrates a successful quantum response against classical rules
     classicalRuleEngine.ts        deterministic fallback (SAFE/REVIEW/HOLD)
     decisionEngine.ts               ties Stage 1 -> Stage 2 -> quantum-or-fallback -> thresholds
+    transactionIngestion.ts   output-routing: persist tx/decision, live feed, blockchain write-back
     federatedLearning.ts            feedback aggregation
   integrations/
     blockchainClient.ts             best-effort calls to services/blockchain/gateway
@@ -46,11 +54,21 @@ npm run build && npm start   # :4000
 curl -X POST localhost:4000/api/node/transactions \
   -H "x-api-key: qbads_sandbox_novafintech" -H "content-type: application/json" \
   -d '{"amount":42000,"currency":"USD","accountAgeDays":2,"paymentChannel":"crypto","crossBorderFlag":true,"newDeviceFlag":true,"mfaUsed":false}'
+# any of the other 24 fields (merchantId, deviceTrustScore, country, ...) are optional -
+# Stage 1 imputes sane defaults for whatever's missing.
 
-curl localhost:4000/api/dashboard/kpis
-curl localhost:4000/api/dashboard/institutions
-curl localhost:4000/api/dashboard/platform-health
-curl localhost:4000/api/dashboard/live-feed   # SSE
+curl -X POST localhost:4000/api/node/transactions/batch \
+  -H "x-api-key: qbads_sandbox_novafintech" -H "content-type: application/json" \
+  -d '{"transactions":[{"amount":120,"currency":"USD","paymentChannel":"card"},{"amount":9000,"currency":"USD","paymentChannel":"crypto","crossBorderFlag":true}]}'
+
+TOKEN=$(curl -s -X POST localhost:4000/api/dashboard/auth/login \
+  -H "content-type: application/json" \
+  -d '{"username":"exec-admin","password":"qbads-exec-admin-2026"}' | jq -r .token)
+
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/kpis
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/institutions
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/platform-health
+curl "localhost:4000/api/dashboard/live-feed?token=$TOKEN"   # SSE - EventSource can't set headers, so token is a query param here
 ```
 
 Sandbox API keys (seeded in `store/inMemoryStore.ts`, one per institution):
@@ -68,8 +86,9 @@ detection / Case management), `/platform-health`, `/quantum-info` (full
 model roster), `/blockchain-info`, `/security` (real auth-failure log +
 masked keys), `/config` (non-secret runtime thresholds),
 `/feature-pipeline` (Stage 1's field classification + recent warnings),
-`/ticker`, `/volume-series`, `/model-performance`, `/live-feed` (SSE). All
-unauthenticated - see "Not done here."
+`/ticker`, `/volume-series`, `/model-performance`, `/live-feed` (SSE), plus
+`/auth/login` and `/auth/logout`. All require a session bearer token except
+`/auth/login` - see "Persistence and Dashboard session auth" below.
 
 ## What's real vs. mocked
 
@@ -78,7 +97,7 @@ unauthenticated - see "Not done here."
 | Node API auth, ingest, query, feedback | Real |
 | Stage 1 feature engineering (validate/classify/impute/normalize) | Real, per the doc's 1.2-1.5 |
 | Stage 2 vector standardization (encoding, assembly) | Real, per the doc's 2.2-2.3 |
-| Stage 2 dimensionality reduction (2.1) | Placeholder - collapses low-priority feature groups when over the qubit budget; **not real PCA**, which needs a covariance matrix fitted on historical data that doesn't exist yet |
+| Stage 2 dimensionality reduction (2.1) | Real PCA (`pipeline/pca.ts`: covariance matrix + Jacobi eigen-decomposition + top-K projection) once a rolling sample buffer has >=30 observations (`pipeline/pcaReducer.ts`); applied selectively to the non-core fields only (core risk fields - amount, crossBorderFlag, newDeviceFlag, mfaUsed, merchantCategory - are never PCA'd). Cold start (fewer than 30 samples) falls back to a documented chunked-average placeholder so the system still works from the first transaction. `GET /api/dashboard/pca-status` reports sample-buffer fill and whether real PCA is currently active. |
 | Quantum orchestration (retries, timeout) | Real |
 | Quantum inference itself | Real by default (`HttpQuantumModelClient` calls `services/quantum-pipeline`) - `MockQuantumModelClient` (heuristic scorer, same interface) is still there behind `QUANTUM_CLIENT_MODE=mock` for local dev without Python running |
 | Response interpretation, classical fallback, decision engine | Real |
@@ -91,17 +110,29 @@ unauthenticated - see "Not done here."
 | `/feature-pipeline` field config + warnings | Real - it's `featureEngineering.ts`'s actual `FIELD_CONFIG` and genuine Stage 1 imputation/quarantine warnings from live submissions |
 | `/quantum-info`, `/blockchain-info` | Real passthrough of each service's own state - honestly reports unreachable/empty rather than fabricating a roster |
 
-## Not done here
+## Persistence and Dashboard session auth
 
-- A proper 30-field transaction schema - the feature-pipeline doc references
-  "the 30 core attributes defined earlier" without listing them, so
-  `RawTransactionInput` is a representative schema spanning every documented
-  data type (continuous, categorical low/high-cardinality, binary, hashed,
-  timestamp), not the literal 30 fields.
-- Persistent storage (everything resets on restart - including the request
-  metrics `metrics.ts` reports and the transactions `platform-health`/`kpis`
-  are computed from).
-- Session auth in front of the Dashboard API (currently open - both
-  dashboards call it directly with no login flow; Node Dash is instead
-  fixed to reading one seeded institution's data, see its own README).
+Both former "Not done here" gaps are now implemented:
+
+- **Persistent storage**: `store/inMemoryStore.ts` is now a write-through
+  cache backed by SQLite (`store/db.ts`, Node's built-in `node:sqlite` -
+  no new dependency; this Node version, `node -v`, ships it natively).
+  Institutions, transactions, decisions, feedback, auth-failure events, and
+  pipeline warnings all survive a restart; the DB file (default
+  `services/middleware/data/middleware.sqlite3`, overridable via
+  `MIDDLEWARE_DB_PATH`, gitignored as runtime state) is created and seeded
+  with the same sandbox institutions/API keys on first run. The PCA rolling
+  sample buffer and SSE subscriber connections stay in-memory-only
+  deliberately - transient warm-up/runtime state, not records of anything
+  that happened.
+- **Dashboard API session auth**: `auth/dashboardAuth.ts` adds
+  `POST /api/dashboard/auth/login` (username/password, scrypt-hashed
+  seeded accounts - `exec-admin` for Company Dash, `novafintech`/
+  `institution` role scoped to `inst-2` for Node Dash) and
+  `POST /api/dashboard/auth/logout`, issuing/revoking short-lived signed
+  JWTs (`jsonwebtoken`). Every other Dashboard API route requires a valid
+  `Authorization: Bearer <token>` (or `?token=` for the SSE `/live-feed`
+  route, since `EventSource` can't set custom headers); the `institution`
+  role is scoped server-side to its own institution's data. The Node API's
+  per-institution `x-api-key` auth (`auth.ts`) is unchanged.
 

@@ -16,6 +16,7 @@ python -m venv .venv
 ./.venv/Scripts/python -m training.cli check-triggers                            # Section 10 triggers vs current champion
 ./.venv/Scripts/python -m training.cli recalibrate                                  # recalibrate the current champion - see training/recalibration/README.md
 ./.venv/Scripts/python -m training.cli check-recalibration-triggers      # recalibration triggers
+./.venv/Scripts/python -m training.cli daemon --duration-seconds 180                # Section 10 cadence scheduler - see daemon.py
 ./.venv/Scripts/python -m training.cli status                                        # registry + current champion
 ```
 
@@ -26,12 +27,13 @@ weights. See `training/recalibration/README.md` for what it does and what
 it verified.
 
 `run` takes roughly 2-3 minutes (three real quantum models trained once
-each). It's a CLI, not a server - Section 10 describes cadence
-(continuous/daily/weekly/monthly/quarterly/emergency) and event triggers,
-which is a scheduler's job, not something to fake by leaving a background
-daemon running in a dev session. `retrain_triggers.py` has the real,
-testable trigger-evaluation logic; wiring a cron/task-queue to call
-`training.cli run` on that schedule is what's left.
+each). Section 10 describes cadence
+(continuous/daily/weekly/monthly/quarterly/emergency) and event triggers;
+`retrain_triggers.py` has the real, testable trigger-evaluation logic, and
+`training.cli daemon` (daemon.py) is the real scheduler that calls it on a
+timer and auto-invokes `training.cli run` when a trigger fires - a
+lightweight stdlib interval loop a deployer would wrap in
+systemd/cron/a container, not a production unit itself.
 
 ## What one `run` actually does
 
@@ -40,9 +42,10 @@ Mirrors `QBADS_Training_Learning_Architecture.pdf` Section 02 end to end:
 1. **`data_acquisition.py`** - generates a synthetic labeled dataset (there's
    no real transaction history anywhere in this repo - Middleware is
    in-memory, see its README) spread across a simulated multi-month
-   timeline, across all seven of Section 03's dataset categories
+   timeline, across all ten of Section 03's dataset categories
    (confirmed fraud/legitimate, false-positive, false-negative,
-   suspicious/reviewed, synthetic fraud, adversarial).
+   suspicious/reviewed, synthetic fraud, adversarial, new fraud patterns,
+   cross-institution patterns, temporal behaviour).
 2. **`data_quality.py`** - dedup, missing-data check, label verification,
    class-balance analysis, a PII-field scan. Feeds Gate 1.
 3. **`feature_engineering.py`** - fixed (never data-fit) projection down to
@@ -65,9 +68,10 @@ Mirrors `QBADS_Training_Learning_Architecture.pdf` Section 02 end to end:
    champion) -> Gate 3 (deployment/operational), sequential, skips 2 and 3
    if 1 fails (Section 07).
 9. **`promotion.py`** - among gate-clearing challengers, promotes the one
-   the supervisor scored highest; a simplified shadow/canary recheck (see
-   its docstring for exactly what's simplified and why); if nothing clears,
-   the incumbent stays champion (Section 08).
+   the supervisor scored highest; a validation-split shadow/canary recheck
+   plus a real traffic-mirroring pass (`shadow_mirror.py`) against genuine
+   Middleware transactions when available; if nothing clears, the incumbent
+   stays champion (Section 08).
 10. **`registry.py`** - persists every candidate (win or lose) to
     `registry/index.json` with full lineage (benchmark + supervisor
     findings + gate results), plus a `champion.json` pointer. QNN/VQC store
@@ -104,8 +108,8 @@ same QNN champion's honest 0.41 recall).
 | Champion/challenger promotion + registry + deploy | Real, verified live against the running engine |
 | Federated averaging | Real FedAvg math; "institutions" are partitions of one synthetic dataset, not separate organizations |
 | Retraining triggers (A-D) | Real, pure evaluation functions |
-| Trigger E (quantum drift) | Explicitly stubbed - the doc itself marks this "a future capability"; there's no cross-backend signal to detect it from (single simulator backend) |
-| Scheduler / cadence automation | **Not built** - `retrain_triggers.py` + the cadence table are ready for a cron/task-queue to call; nothing runs on a timer |
-| Shadow / canary deployment | **Simplified** - re-evaluated on an untouched validation split and a random subset, standing in for mirrored/routed live traffic, which nothing in this repo has (Middleware calls the Quantum Engine directly, no mirroring layer) |
-| Training data | **Synthetic** - `data_acquisition.py` generates it; there's no real transaction history to collect yet |
+| Trigger E (quantum drift) | Real, simulator-scoped - compares the champion's noise-sensitivity/circuit-depth (benchmarking.py) against a rolling baseline pulled from the registry (`retrain_triggers.compute_quantum_drift_score`, `trigger_runner.py`), same pattern as Trigger C's data drift. Detects simulator-level circuit/backend behavior drift between training runs, not live QPU drift - there's no QPU here |
+| Scheduler / cadence automation | Real - `training.cli daemon` (daemon.py): a stdlib interval loop that runs `check-triggers` on a configurable interval and auto-invokes `training.cli run` when one fires, plus the weekly/monthly/quarterly cadence on their own configurable intervals (`TRAINING_DAEMON_*_SECONDS`, config.py) |
+| Shadow / canary deployment | Two independent passes now: `_shadow_canary_recheck` (promotion.py) re-evaluates on the validation split and a random subset, kept as a stress test; `shadow_mirror.py` is the real traffic-mirroring mechanism - real Middleware transactions (`GET /api/dashboard/transactions`, authenticated via its dashboard login) scored by both the frozen champion and the challenger for agreement rate/score drift, with a documented fallback to the validation split when Middleware isn't running or has no transactions yet |
+| Training data | **Synthetic** - `data_acquisition.py` generates it, now across all ten of Section 03's dataset categories (`new_fraud_pattern`, `cross_institution`, `temporal_behaviour` added alongside the original seven); there's no real transaction history to collect yet |
 | Consuming Quantum Engine's `/feedback` queue | **Not done** - that queue exists on the engine but nothing here reads it; this pipeline generates its own labels instead |

@@ -4,6 +4,7 @@ import { config } from "./config";
 import { nodeApiRouter } from "./routes/nodeApi";
 import { dashboardApiRouter } from "./routes/dashboardApi";
 import { requestMetricsMiddleware } from "./metrics";
+import { startTransactionConsumer } from "./streaming/transactionConsumer";
 
 /**
  * "API Gateway (entry layer): AuthN/AuthZ - routes all four APIs"
@@ -30,9 +31,22 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: err.message });
 });
 
-app.listen(config.port, () => {
-  console.log(`QBADS middleware listening on :${config.port}`);
-  console.log(`  quantum timeout=${config.quantumTimeoutMs}ms retries=${config.quantumMaxRetries} failureRate=${config.quantumFailureRate}`);
-  console.log(`  thresholds review>=${config.reviewThreshold} fraud>=${config.fraudThreshold}`);
-  console.log(`  blockchain gateway=${config.blockchainGatewayUrl} writesEnabled=${config.blockchainWriteEnabled}`);
+async function main() {
+  // Start the streaming subscriber before accepting HTTP traffic - the Node
+  // API's ingest handlers publish onto qbads.transactions.raw and await
+  // this consumer's result, so it must already be subscribed by the time
+  // the first request can arrive.
+  await startTransactionConsumer();
+
+  app.listen(config.port, () => {
+    console.log(`QBADS middleware listening on :${config.port}`);
+    console.log(`  quantum timeout=${config.quantumTimeoutMs}ms retries=${config.quantumMaxRetries} failureRate=${config.quantumFailureRate}`);
+    console.log(`  thresholds review>=${config.reviewThreshold} fraud>=${config.fraudThreshold}`);
+    console.log(`  blockchain gateway=${config.blockchainGatewayUrl} writesEnabled=${config.blockchainWriteEnabled}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("[server] fatal startup error", err);
+  process.exit(1);
 });

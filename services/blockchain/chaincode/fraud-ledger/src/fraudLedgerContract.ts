@@ -46,11 +46,62 @@ const decisionKey = (txId: string) => `DECISION_${txId}`;
  * channel policy alone.
  */
 const AUDITOR_ONLY_MSPS = ["RegulatorDMSP"];
+const WRITER_MSPS = ["BankAMSP", "BankBMSP", "InstitutionCMSP"];
 
+/**
+ * Dedicated Middleware application identity: `User2@banka.qbads.com`, a
+ * non-admin client identity provisioned under BankAMSP specifically for the
+ * gateway service (see network/crypto-config.yaml and
+ * gateway/src/config.ts) - distinct from BankA's own operational identity
+ * (`User1@banka.qbads.com`). There's no 5th "Middleware" org/MSP per the
+ * spec's fixed 4-org consortium (Section 2), so this identity is
+ * distinguished by common name within BankAMSP rather than by MSPID.
+ *
+ * `ctx.clientIdentity.getID()` returns an escaped X.509 subject/issuer DN
+ * string of the form `x509::/OU=client/CN=User2@banka.qbads.com::/...`, so a
+ * substring match on the CN is sufficient and is the standard way to check
+ * a specific enrollment ID from chaincode when the identity wasn't issued
+ * with a custom ABAC attribute (cryptogen's static material can't attach
+ * one; a Fabric CA-issued `role=middleware` attribute checked via
+ * `ctx.clientIdentity.assertAttributeValue()` would be the production
+ * upgrade - see README "Not done here").
+ */
+const MIDDLEWARE_CLIENT_MSP = "BankAMSP";
+const MIDDLEWARE_CLIENT_CN = "User2@banka.qbads.com";
+
+function isMiddlewareIdentity(ctx: Context): boolean {
+  return (
+    ctx.clientIdentity.getMSPID() === MIDDLEWARE_CLIENT_MSP &&
+    ctx.clientIdentity.getID().includes(`CN=${MIDDLEWARE_CLIENT_CN}`)
+  );
+}
+
+/** Bank / Wallet / Middleware may submit transactions; Auditor may not. */
 function assertCanWrite(ctx: Context): void {
   const mspId = ctx.clientIdentity.getMSPID();
   if (AUDITOR_ONLY_MSPS.includes(mspId)) {
     throw new Error(`${mspId} is an auditor identity (read ledger only) and may not submit transactions or decisions`);
+  }
+  if (!WRITER_MSPS.includes(mspId)) {
+    throw new Error(`${mspId} is not a recognized writer organization`);
+  }
+}
+
+/**
+ * Fraud decisions are the ML model's output, relayed back on-chain
+ * exclusively through the Middleware boundary (README: "RecordFraudDecision
+ * ... Middleware Blockchain API 'out'") - unlike inbound transaction
+ * submission, this is not something a bank should be able to write on its
+ * own behalf, so it is scoped to the dedicated Middleware identity rather
+ * than to any writer-org identity.
+ */
+function assertIsMiddleware(ctx: Context): void {
+  assertCanWrite(ctx);
+  if (!isMiddlewareIdentity(ctx)) {
+    throw new Error(
+      "Only the dedicated Middleware application identity may record fraud decisions " +
+        "(Section 5 permission model: Middleware - read events / submit transactions)",
+    );
   }
 }
 
@@ -124,7 +175,7 @@ export class FraudLedgerContract extends Contract {
     decisionHash: string,
     decidedAt: string,
   ): Promise<void> {
-    assertCanWrite(ctx);
+    assertIsMiddleware(ctx);
     const txBytes = await ctx.stub.getState(txKey(txId));
     if (txBytes.length === 0) {
       throw new Error(`Cannot record a decision for unknown transaction ${txId}`);

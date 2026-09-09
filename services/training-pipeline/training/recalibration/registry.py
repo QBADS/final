@@ -98,3 +98,82 @@ def set_calibration_champion(entry: dict) -> None:
 
 def load_calibration_index() -> list[dict]:
     return _load_json(CALIBRATION_INDEX_PATH, [])
+
+
+def get_calibration_history(model_type: str, model_version: str) -> list[dict]:
+    """Every calibration_index entry ever fitted for this exact model
+    version (win or lose), in fitted order - Section 08's 1:1 versioning."""
+    key = _model_key(model_type, model_version)
+    return [e for e in load_calibration_index() if _model_key(e["modelType"], e["modelVersion"]) == key]
+
+
+def get_calibration_by_version(model_type: str, model_version: str, calibration_version: str) -> dict | None:
+    """Look up one specific historical map by its calibrationVersion id
+    (e.g. "cal-c3") within this model version's history - used by
+    `recalibrate-rollback --to` to redeploy exactly those previously-fitted
+    params rather than refitting (Section 10: instant, zero model risk)."""
+    for entry in get_calibration_history(model_type, model_version):
+        if entry["calibrationVersion"] == calibration_version:
+            return entry
+    return None
+
+
+def get_previous_champion(model_type: str, model_version: str) -> dict | None:
+    """The map demoted by whichever entry is currently champion for this
+    model version - the next most recent promoted=True entry before it, if
+    one exists. Rollback default target for Section 10's "revert to the
+    previous champion map"."""
+    current = get_calibration_champion(model_type, model_version)
+    promoted = [e for e in get_calibration_history(model_type, model_version) if e.get("promoted")]
+    promoted.sort(key=lambda e: e.get("calibrationCycle", 0))
+    if current is not None:
+        promoted = [e for e in promoted if e["calibrationVersion"] != current["calibrationVersion"]]
+    return promoted[-1] if promoted else None
+
+
+def record_rollback(
+    model_type: str,
+    model_version: str,
+    *,
+    calibration_version: str,
+    method: str,
+    params: dict,
+    rolled_back_to: str,
+    reliability_findings: dict | None = None,
+    holdout_samples: int | None = None,
+) -> dict:
+    """Records a `recalibrate-rollback` deploy in the calibration index and
+    moves the champion pointer to match - Section 10: "instant and carry
+    zero model risk," so this is a redeploy of an already-registered
+    (or identity) map, never a refit. Keeps the registry's own state
+    consistent with what was actually just pushed to the engine.
+
+    Carries the same "supervisor.findings" shape a normal fitted entry has
+    (reliability + operational) whenever the caller can supply it - e.g.
+    copied straight from the historical entry being restored, or freshly
+    measured for an identity rollback - so entries this produces stay
+    readable by existing consumers (`check-recalibration-triggers`,
+    `status`) without special-casing "rollback" entries."""
+    entry = {
+        "calibrationCycle": next_calibration_version(),
+        "calibrationVersion": calibration_version,
+        "modelType": model_type,
+        "modelVersion": model_version,
+        "fittedAt": datetime.now(timezone.utc).isoformat(),
+        "method": method,
+        "params": params,
+        "rollback": True,
+        "rolledBackTo": rolled_back_to,
+        "promoted": True,
+        "supervisor": {
+            "findings": {
+                "reliability": reliability_findings or {"brierBefore": None, "brierAfter": None, "eceBefore": None, "eceAfter": None},
+                "operational": {"holdoutSamples": holdout_samples, "sampleAdequate": None, "latencyMs": None},
+            }
+        },
+    }
+    index = _load_json(CALIBRATION_INDEX_PATH, [])
+    index.append(entry)
+    _save_json(CALIBRATION_INDEX_PATH, index)
+    set_calibration_champion(entry)
+    return entry

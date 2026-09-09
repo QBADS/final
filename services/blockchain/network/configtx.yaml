@@ -1,4 +1,11 @@
 ---
+# NOTE: each org's AnchorPeers entry below still lists only peer0 - that's
+# just the gossip discovery bootstrap peer per org (Fabric convention), not
+# a cap on peer count. Every org actually runs two peers (peer0 + peer1;
+# see crypto-config.yaml Template.Count: 2 and docker-compose.yaml's
+# peer1.* services) so the majority endorsement policy configured in
+# scripts/deploy-chaincode.sh (OutOf(3, ...) of 4 orgs) has real per-org
+# fault tolerance instead of depending on a single peer per org.
 Organizations:
   - &OrdererOrg
     Name: OrdererOrg

@@ -26,7 +26,7 @@ from .config import settings
 
 RAW_FEATURE_DIM = 12  # transaction / behavioural / temporal / velocity / geographic / network signals
 
-Category = str  # confirmed_fraud | confirmed_legitimate | false_positive | false_negative | suspicious_reviewed | synthetic_fraud | adversarial
+Category = str  # confirmed_fraud | confirmed_legitimate | false_positive | false_negative | suspicious_reviewed | synthetic_fraud | adversarial | new_fraud_pattern | cross_institution | temporal_behaviour
 
 
 @dataclass
@@ -111,5 +111,157 @@ def generate_dataset() -> list[TrainingRecord]:
                 )
             )
 
+    end = start + timedelta(days=settings.synthetic_days)
+    records.extend(_generate_new_fraud_pattern_records(rng, institutions, start, end, record_idx))
+    record_idx += settings.synthetic_new_fraud_pattern_records
+    records.extend(_generate_cross_institution_records(rng, institutions, start, end, record_idx))
+    record_idx += settings.synthetic_cross_institution_groups * 2
+    records.extend(_generate_temporal_behaviour_records(rng, institutions, start, end, record_idx))
+
     records.sort(key=lambda r: r.timestamp)
+    return records
+
+
+def _generate_new_fraud_pattern_records(
+    rng: np.random.Generator,
+    institutions: list[str],
+    start: datetime,
+    end: datetime,
+    record_idx: int,
+) -> list[TrainingRecord]:
+    """Section 03's "new fraud patterns" category: a fraud signature none
+    of the other seven generators above produce. Two things make it
+    genuinely novel rather than a relabeled copy of "confirmed_fraud":
+
+    1. Signal shape - the other categories put risk into raw[:4] as a
+       roughly uniform elevated block (`true_risk +/- noise`). This
+       category instead encodes risk as a *sharp, alternating* pattern
+       (high/low/high/low) that a model trained only on the other
+       categories' smooth-block signal would not have learned to read.
+    2. Timing - it only appears in the last 15% of the timeline, i.e.
+       *after* the dataset_builder.py temporal cutoffs that put the rest
+       of the bootstrap data into train/validation. A model trained on the
+       other categories genuinely has not seen this pattern by
+       construction, not just by label.
+    """
+    n = settings.synthetic_new_fraud_pattern_records
+    window_start = start + (end - start) * 0.85
+    records = []
+    for i in range(n):
+        institution_id = institutions[rng.integers(0, len(institutions))]
+        timestamp = window_start + (end - window_start) * rng.random()
+        raw = np.empty(RAW_FEATURE_DIM)
+        # Alternating high/low block - a shape, not just a level, that the
+        # smooth-block generators above never produce.
+        raw[0] = rng.uniform(0.75, 1.0)
+        raw[1] = rng.uniform(0.0, 0.15)
+        raw[2] = rng.uniform(0.75, 1.0)
+        raw[3] = rng.uniform(0.0, 0.15)
+        raw[4:] = rng.uniform(0, 1, size=RAW_FEATURE_DIM - 4)
+        records.append(
+            TrainingRecord(
+                record_id=f"TRAIN-{record_idx + i + 1:06d}",
+                institution_id=institution_id,
+                timestamp=timestamp,
+                raw_features=raw,
+                category="new_fraud_pattern",
+                label=1,
+                context={"true_risk": 0.9, "pattern": "alternating_signal_late_window"},
+            )
+        )
+    return records
+
+
+def _generate_cross_institution_records(
+    rng: np.random.Generator,
+    institutions: list[str],
+    start: datetime,
+    end: datetime,
+    record_idx: int,
+) -> list[TrainingRecord]:
+    """Section 03's "cross-institution patterns" category: individually
+    unremarkable-looking transactions that are only suspicious once you
+    correlate them across institutions - the same device fingerprint
+    attempting transactions at 2+ different institutions within a short
+    window. Needs >=2 institutions to be meaningful; if the deployment is
+    configured with just one, this degenerates to nothing (logged as 0
+    groups, not silently mislabeled)."""
+    records = []
+    if len(institutions) < 2:
+        return records
+    idx = 0
+    for g in range(settings.synthetic_cross_institution_groups):
+        fingerprint = f"device-{rng.integers(0, 1_000_000):06d}"
+        n_institutions_hit = min(len(institutions), int(rng.integers(2, min(3, len(institutions)) + 1)))
+        hit_institutions = list(rng.choice(institutions, size=n_institutions_hit, replace=False))
+        base_time = start + (end - start) * rng.random()
+        for inst in hit_institutions:
+            # Same fingerprint, different institution, minutes apart - the
+            # "short window" that makes this cross-institution fraud rather
+            # than two unrelated legitimate transactions.
+            offset = timedelta(minutes=float(rng.uniform(0, 12)))
+            raw = np.empty(RAW_FEATURE_DIM)
+            raw[:4] = np.clip(rng.normal(0.7, 0.1, size=4), 0, 1)
+            raw[4:] = rng.uniform(0, 1, size=RAW_FEATURE_DIM - 4)
+            records.append(
+                TrainingRecord(
+                    record_id=f"TRAIN-{record_idx + idx + 1:06d}",
+                    institution_id=inst,
+                    timestamp=base_time + offset,
+                    raw_features=raw,
+                    category="cross_institution",
+                    label=1,
+                    context={"true_risk": 0.75, "device_fingerprint": fingerprint, "linked_institutions": hit_institutions},
+                )
+            )
+            idx += 1
+    return records
+
+
+def _generate_temporal_behaviour_records(
+    rng: np.random.Generator,
+    institutions: list[str],
+    start: datetime,
+    end: datetime,
+    record_idx: int,
+) -> list[TrainingRecord]:
+    """Section 03's "temporal behaviour" category: velocity/time-of-day
+    anomalies, distinct from the general dataset's plain timestamp field -
+    a burst of several transactions within a tight window (velocity
+    anomaly) at an hour a legitimate customer of that pattern wouldn't
+    normally transact at (time-of-day anomaly), both encoded explicitly in
+    `context` so they're inspectable, not just implied by timestamp
+    proximity."""
+    records = []
+    idx = 0
+    for g in range(settings.synthetic_temporal_behaviour_groups):
+        institution_id = institutions[rng.integers(0, len(institutions))]
+        burst_size = int(rng.integers(4, 8))
+        anomalous_hour = int(rng.integers(1, 5))  # 1am-4am, well outside normal daytime activity
+        day_offset = timedelta(days=float(rng.integers(0, settings.synthetic_days)))
+        burst_start = start + day_offset + timedelta(hours=anomalous_hour)
+        for b in range(burst_size):
+            # Whole burst inside a 90-second window - a velocity anomaly no
+            # single-record timestamp field on its own would flag.
+            offset = timedelta(seconds=float(rng.uniform(0, 90)))
+            raw = np.empty(RAW_FEATURE_DIM)
+            raw[:4] = np.clip(rng.normal(0.65, 0.1, size=4), 0, 1)
+            raw[4:] = rng.uniform(0, 1, size=RAW_FEATURE_DIM - 4)
+            records.append(
+                TrainingRecord(
+                    record_id=f"TRAIN-{record_idx + idx + 1:06d}",
+                    institution_id=institution_id,
+                    timestamp=burst_start + offset,
+                    raw_features=raw,
+                    category="temporal_behaviour",
+                    label=1,
+                    context={
+                        "true_risk": 0.7,
+                        "burst_size": burst_size,
+                        "burst_position": b,
+                        "anomalous_hour": anomalous_hour,
+                    },
+                )
+            )
+            idx += 1
     return records

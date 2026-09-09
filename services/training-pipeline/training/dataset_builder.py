@@ -72,8 +72,22 @@ def build_datasets(records: list[TrainingRecord]) -> DatasetBundle:
     hard_negative_records = [
         r for r in train_records + validation_records if r.category == "false_positive"
     ]
+    # Adversarial/synthetic fraud (robustness to engineered evasion) plus
+    # Section 03's three "new" categories - new fraud patterns (by
+    # construction largely in this late window already, see
+    # data_acquisition.py), cross-institution patterns, and temporal-
+    # behaviour bursts, all of which are exactly the kind of held-out,
+    # never-trained-on signal a stress test should include.
     stress_test_records = [
-        r for r in test_records if r.category in ("adversarial", "synthetic_fraud")
+        r
+        for r in test_records
+        if r.category in (
+            "adversarial",
+            "synthetic_fraud",
+            "new_fraud_pattern",
+            "cross_institution",
+            "temporal_behaviour",
+        )
     ]
 
     capped_train = _stratified_cap(train_records, settings.max_training_samples, settings.synthetic_seed)

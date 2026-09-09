@@ -63,6 +63,7 @@ def save_candidate(
     supervisor: SupervisorVerdict,
     gates: GateOutcome,
     promoted: bool,
+    shadow_mirror: dict | None = None,
 ) -> dict:
     _ensure_dirs()
     artifact_path = _artifact_path(candidate.model_type, cycle)
@@ -98,6 +99,7 @@ def save_candidate(
             "promotable": gates.promotable,
         },
         "promoted": promoted,
+        "shadowMirror": shadow_mirror,
     }
 
     index = _load_json(INDEX_PATH, [])

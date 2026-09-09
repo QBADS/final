@@ -5,9 +5,11 @@ import { getBlockchainHealth, getQuantumEngineHealth, getQuantumEngineModels } f
 import { requestMetricsSnapshot } from "../metrics";
 import { config } from "../config";
 import { FIELD_CONFIG } from "../pipeline/featureEngineering";
+import { pcaStatus } from "../pipeline/pcaReducer";
+import { dashboardAuthRouter, requireDashboardSession, forbiddenForOtherInstitution, scopeInstitutionId } from "../auth/dashboardAuth";
 import type { FraudDecisionRecord, Institution, StoredTransaction } from "../domainTypes";
 
-// The Dashboard API is unauthenticated (see note below) - never leak the
+// Even with session auth in front of the Dashboard API, never leak the
 // Node API credential alongside institution metadata.
 function publicInstitution(inst: Institution) {
   const { apiKey: _apiKey, ...rest } = inst;
@@ -39,11 +41,18 @@ function institutionSummary(inst: Institution) {
  * Dashboard API (QBADS_Middleware_Flow_Structure.pdf, Section 1):
  * "Outbound - Risk events, fraud stats, node connection status, model
  * performance - Serve Node Dash (fintech) and Company Dash (QBADS) with
- * real-time visibility." Unauthenticated here (reference implementation);
- * a real deployment would put session auth in front of it, scoping Node
- * Dash calls to the caller's own institution.
+ * real-time visibility." Session-authenticated (../auth/dashboardAuth.ts):
+ * every route below requires a valid bearer token except the login route
+ * itself; the "institution" role (Node Dash) is additionally scoped to its
+ * own seeded institution.
  */
 export const dashboardApiRouter = Router();
+
+// POST /api/dashboard/auth/login and /auth/logout are the only
+// unauthenticated routes on this router - mounted before the auth
+// middleware below so they never require a token themselves.
+dashboardApiRouter.use("/auth", dashboardAuthRouter);
+dashboardApiRouter.use(requireDashboardSession);
 
 const LIVE_RATE_WINDOW_MS = 10_000;
 
@@ -88,6 +97,10 @@ dashboardApiRouter.get("/institutions", (_req, res) => {
 });
 
 dashboardApiRouter.get("/institutions/:id", (req, res) => {
+  if (forbiddenForOtherInstitution(req, req.params.id)) {
+    res.status(403).json({ error: "not authorized for this institution" });
+    return;
+  }
   const institution = store.institutions.get(req.params.id);
   if (!institution) {
     res.status(404).json({ error: "institution not found" });
@@ -179,7 +192,11 @@ dashboardApiRouter.get("/ticker", (_req, res) => {
 // optionally filtered by institution, decision outcome, or risk level.
 // Fraud detection = decision in (FRAUD, HOLD); Case management = REVIEW.
 dashboardApiRouter.get("/transactions", (req, res) => {
-  const { institutionId, decision, riskLevel } = req.query;
+  const { decision, riskLevel } = req.query;
+  // The "institution" role (Node Dash) can only ever see its own
+  // institution's rows - scopeInstitutionId ignores/overrides whatever the
+  // query string asked for in that case.
+  const institutionId = scopeInstitutionId(req, typeof req.query.institutionId === "string" ? req.query.institutionId : undefined);
 
   type Row = { tx: StoredTransaction; decision: FraudDecisionRecord };
   let rows: Row[] = [...store.transactions.values()]
@@ -269,6 +286,15 @@ dashboardApiRouter.get("/feature-pipeline", (_req, res) => {
     fields: Object.entries(FIELD_CONFIG).map(([name, cfg]) => ({ name, ...cfg })),
     recentWarnings: store.pipelineWarnings,
   });
+});
+
+// Stage 2.1's real-PCA state - sample buffer fill level and whether the
+// dimensionality-reduction path currently uses a fitted PCA model or is
+// still in cold-start fallback (pipeline/pcaReducer.ts). Lightweight and
+// genuinely useful for observability, so it stays rather than being
+// scaffolding-only.
+dashboardApiRouter.get("/pca-status", (_req, res) => {
+  res.json(pcaStatus());
 });
 
 // Risk events / live feed, streamed to the dashboards as SSE.

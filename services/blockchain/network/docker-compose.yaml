@@ -68,13 +68,21 @@ services:
       - "9053:7053"
     networks: [qbads]
 
-  # --- CouchDB state databases, one per peer ---
+  # --- CouchDB state databases, one per peer (2 peers/org: peer0 + peer1) ---
   couchdb.banka:
     image: hyperledger/fabric-couchdb:latest
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
     ports: ["5984:5984"]
+    networks: [qbads]
+
+  couchdb.banka2:
+    image: hyperledger/fabric-couchdb:latest
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports: ["5985:5984"]
     networks: [qbads]
 
   couchdb.bankb:
@@ -85,12 +93,28 @@ services:
     ports: ["6984:5984"]
     networks: [qbads]
 
+  couchdb.bankb2:
+    image: hyperledger/fabric-couchdb:latest
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports: ["6985:5984"]
+    networks: [qbads]
+
   couchdb.institutionc:
     image: hyperledger/fabric-couchdb:latest
     environment:
       - COUCHDB_USER=admin
       - COUCHDB_PASSWORD=adminpw
     ports: ["7984:5984"]
+    networks: [qbads]
+
+  couchdb.institutionc2:
+    image: hyperledger/fabric-couchdb:latest
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports: ["7985:5984"]
     networks: [qbads]
 
   couchdb.regulatord:
@@ -101,33 +125,49 @@ services:
     ports: ["8984:5984"]
     networks: [qbads]
 
+  couchdb.regulatord2:
+    image: hyperledger/fabric-couchdb:latest
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports: ["8985:5984"]
+    networks: [qbads]
+
   # --- Organization peers ---
+  # Two peers per org (peer0 + peer1) so the majority endorsement policy in
+  # scripts/deploy-chaincode.sh (OutOf(3, ...) of 4 orgs) is backed by real
+  # per-org fault tolerance: if an org's peer0 is down, peer1 can still
+  # endorse on that org's behalf instead of the whole org going dark.
   peer0.banka.qbads.com:
     image: hyperledger/fabric-peer:2.5
+    # NOTE: mapping (KEY: value) form, not the "- KEY=value" list form used
+    # for orderer-env above - a YAML merge key (`<<`) can only merge in a
+    # mapping, and every other peer block below merges *peer-env-common with
+    # its own per-peer overrides, so the anchored value has to be a mapping.
     environment: &peer-env-common
-      - FABRIC_LOGGING_SPEC=INFO
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=qbads
-      - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_USELEADERELECTION=true
-      - CORE_PEER_GOSSIP_ORGLEADER=false
-      - CORE_PEER_PROFILE_ENABLED=false
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
-      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb.banka:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
-      - CORE_PEER_ID=peer0.banka.qbads.com
-      - CORE_PEER_ADDRESS=peer0.banka.qbads.com:7051
-      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
-      - CORE_PEER_CHAINCODEADDRESS=peer0.banka.qbads.com:7052
-      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.banka.qbads.com:7051
-      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.banka.qbads.com:7051
-      - CORE_PEER_LOCALMSPID=BankAMSP
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      FABRIC_LOGGING_SPEC: INFO
+      CORE_VM_ENDPOINT: unix:///host/var/run/docker.sock
+      CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE: qbads
+      CORE_PEER_TLS_ENABLED: "true"
+      CORE_PEER_GOSSIP_USELEADERELECTION: "true"
+      CORE_PEER_GOSSIP_ORGLEADER: "false"
+      CORE_PEER_PROFILE_ENABLED: "false"
+      CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
+      CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
+      CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/tls/ca.crt
+      CORE_LEDGER_STATE_STATEDATABASE: CouchDB
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb.banka:5984
+      CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME: admin
+      CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD: adminpw
+      CORE_PEER_ID: peer0.banka.qbads.com
+      CORE_PEER_ADDRESS: peer0.banka.qbads.com:7051
+      CORE_PEER_LISTENADDRESS: 0.0.0.0:7051
+      CORE_PEER_CHAINCODEADDRESS: peer0.banka.qbads.com:7052
+      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.banka.qbads.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.banka.qbads.com:7051
+      CORE_PEER_LOCALMSPID: BankAMSP
+      CORE_PEER_MSPCONFIGPATH: /etc/hyperledger/fabric/msp
     working_dir: /root
     command: peer node start
     volumes:
@@ -137,6 +177,28 @@ services:
       - peer0.banka:/var/hyperledger/production
     ports: ["7051:7051"]
     depends_on: [couchdb.banka]
+    networks: [qbads]
+
+  peer1.banka.qbads.com:
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      <<: *peer-env-common
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb.banka2:5984
+      CORE_PEER_ID: peer1.banka.qbads.com
+      CORE_PEER_ADDRESS: peer1.banka.qbads.com:7051
+      CORE_PEER_CHAINCODEADDRESS: peer1.banka.qbads.com:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer1.banka.qbads.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer1.banka.qbads.com:7051
+      CORE_PEER_LOCALMSPID: BankAMSP
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./crypto-config/peerOrganizations/banka.qbads.com/peers/peer1.banka.qbads.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/banka.qbads.com/peers/peer1.banka.qbads.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.banka:/var/hyperledger/production
+    ports: ["7061:7051"]
+    depends_on: [couchdb.banka2]
     networks: [qbads]
 
   peer0.bankb.qbads.com:
@@ -161,6 +223,28 @@ services:
     depends_on: [couchdb.bankb]
     networks: [qbads]
 
+  peer1.bankb.qbads.com:
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      <<: *peer-env-common
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb.bankb2:5984
+      CORE_PEER_ID: peer1.bankb.qbads.com
+      CORE_PEER_ADDRESS: peer1.bankb.qbads.com:7051
+      CORE_PEER_CHAINCODEADDRESS: peer1.bankb.qbads.com:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer1.bankb.qbads.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer1.bankb.qbads.com:7051
+      CORE_PEER_LOCALMSPID: BankBMSP
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./crypto-config/peerOrganizations/bankb.qbads.com/peers/peer1.bankb.qbads.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/bankb.qbads.com/peers/peer1.bankb.qbads.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.bankb:/var/hyperledger/production
+    ports: ["8061:7051"]
+    depends_on: [couchdb.bankb2]
+    networks: [qbads]
+
   peer0.institutionc.qbads.com:
     image: hyperledger/fabric-peer:2.5
     environment:
@@ -183,6 +267,28 @@ services:
     depends_on: [couchdb.institutionc]
     networks: [qbads]
 
+  peer1.institutionc.qbads.com:
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      <<: *peer-env-common
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb.institutionc2:5984
+      CORE_PEER_ID: peer1.institutionc.qbads.com
+      CORE_PEER_ADDRESS: peer1.institutionc.qbads.com:7051
+      CORE_PEER_CHAINCODEADDRESS: peer1.institutionc.qbads.com:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer1.institutionc.qbads.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer1.institutionc.qbads.com:7051
+      CORE_PEER_LOCALMSPID: InstitutionCMSP
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./crypto-config/peerOrganizations/institutionc.qbads.com/peers/peer1.institutionc.qbads.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/institutionc.qbads.com/peers/peer1.institutionc.qbads.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.institutionc:/var/hyperledger/production
+    ports: ["9061:7051"]
+    depends_on: [couchdb.institutionc2]
+    networks: [qbads]
+
   peer0.regulatord.qbads.com:
     image: hyperledger/fabric-peer:2.5
     environment:
@@ -203,6 +309,28 @@ services:
       - peer0.regulatord:/var/hyperledger/production
     ports: ["10051:7051"]
     depends_on: [couchdb.regulatord]
+    networks: [qbads]
+
+  peer1.regulatord.qbads.com:
+    image: hyperledger/fabric-peer:2.5
+    environment:
+      <<: *peer-env-common
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb.regulatord2:5984
+      CORE_PEER_ID: peer1.regulatord.qbads.com
+      CORE_PEER_ADDRESS: peer1.regulatord.qbads.com:7051
+      CORE_PEER_CHAINCODEADDRESS: peer1.regulatord.qbads.com:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer1.regulatord.qbads.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer1.regulatord.qbads.com:7051
+      CORE_PEER_LOCALMSPID: RegulatorDMSP
+    working_dir: /root
+    command: peer node start
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./crypto-config/peerOrganizations/regulatord.qbads.com/peers/peer1.regulatord.qbads.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/regulatord.qbads.com/peers/peer1.regulatord.qbads.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.regulatord:/var/hyperledger/production
+    ports: ["10061:7051"]
+    depends_on: [couchdb.regulatord2]
     networks: [qbads]
 
   # --- CLI, for channel creation / chaincode lifecycle ---
@@ -230,6 +358,10 @@ services:
 
 volumes:
   peer0.banka:
+  peer1.banka:
   peer0.bankb:
+  peer1.bankb:
   peer0.institutionc:
+  peer1.institutionc:
   peer0.regulatord:
+  peer1.regulatord:

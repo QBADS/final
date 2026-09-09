@@ -12,13 +12,13 @@ fit together; each pillar below links to its source document.
 
 | Pillar | Status | Doc |
 |---|---|---|
-| Company Dash (`apps/company-dashboard`) | All 18 pages built and wired to live Middleware data — no stubs left | source: existing HTML mockup |
+| Company Dash (`apps/company-dashboard`) | All 18 pages built and wired to live, session-authenticated Middleware data — no stubs left | source: existing HTML mockup |
 | Node Dash (`apps/node-dashboard`) | All 7 pages built and wired, including a real interactive feedback form | none existed; built from the architecture sketch |
-| Middleware (`services/middleware`) | Built and running (:4000) | `QBADS_Middleware_Flow_Structure.pdf` |
-| Blockchain (`services/blockchain`) | Code complete, not deployed | `QBADS_Hyperledger_Fabric_Architecture.pdf` |
+| Middleware (`services/middleware`) | Built and running (:4000): full 30-field schema, batch ingestion, real PCA, a Kafka-compatible streaming ingestion stage, a real classical+quantum ensemble decision engine, session-authenticated Dashboard API, SQLite-backed persistence | `QBADS_Middleware_Flow_Structure.pdf` |
+| Blockchain (`services/blockchain`) | Code complete, not deployed — dedicated Middleware identity, 3-of-4 majority endorsement across 2 peers/org. Live network still blocked: this environment's Docker daemon cannot pull any container image (registry blob downloads return 403 through the sandbox's network proxy) | `QBADS_Hyperledger_Fabric_Architecture.pdf` |
 | Quantum Engine — QSVM/QNN/VQC (`services/quantum-pipeline`) | Built and running (:4002), wired into Middleware | `Quantum_Engine_Base_Architecture.pdf` |
-| Training Intelligence Layer (`services/training-pipeline`) | Built and verified — trained, gated, and deployed a real model into the live engine | `QBADS_Training_Learning_Architecture.pdf` |
-| Recalibration Layer (`services/training-pipeline/training/recalibration`) | Built and verified — fit real calibration maps against a live champion; gates correctly rejected both this run | `QBADS_Recalibration_Architecture.pdf` |
+| Training Intelligence Layer (`services/training-pipeline`) | Built and verified — trained, gated, and deployed a real model into the live engine; all 10 spec dataset categories, real shadow-mirror traffic comparison, a scheduler daemon, and a real Trigger E (quantum drift) | `QBADS_Training_Learning_Architecture.pdf` |
+| Recalibration Layer (`services/training-pipeline/training/recalibration`) | Built and verified — fit real calibration maps against a live champion; gates correctly rejected both this run; monotonicity is now a hard pre-filter before the Supervisor, and a `recalibrate-rollback` CLI command exists for instant reversion | `QBADS_Recalibration_Architecture.pdf` |
 
 `Quantum_Ready_Feature_Pipeline_Stage1_Stage2.pdf` isn't its own pillar —
 its Stage 1/2 (validation, normalization, dimensionality reduction, quantum
@@ -68,6 +68,60 @@ pages with a headless-browser pass (zero console errors, zero failed
 requests) and spot-checked several by screenshot, including submitting
 Node Dash's feedback form for real and confirming it POSTs, persists, and
 reappears in the UI on the next poll cycle.
+
+## Gap-closure pass (post-audit)
+
+A prior full-system audit against all seven spec docs found ~10 real or
+documented gaps. This pass closed every one that doesn't require external
+infrastructure this sandbox cannot provide:
+
+- **30-field transaction schema** — `domainTypes.ts` / `packages/types` now
+  carry the full spec-required 30 attributes across transaction details,
+  customer behavior, device signals, location signals, authentication
+  signals, and merchant/risk indicators, each correctly classified and
+  normalized in Stage 1.
+- **Batch ingestion** — `POST /api/node/transactions/batch` (partial-failure
+  reporting, cap 100).
+- **Real PCA** — `pipeline/pca.ts` implements actual covariance/Jacobi
+  eigendecomposition-based dimensionality reduction over a rolling sample
+  buffer, replacing the earlier placeholder collapse, with a documented
+  cold-start fallback.
+- **Kafka-compatible streaming ingestion** — `streaming/`: real `kafkajs`
+  wiring for a production broker (`KAFKA_BROKERS`), with an in-process
+  fallback broker (same interface) used here since no external broker can
+  be reached in this sandbox.
+- **Classical + quantum ensemble** — `pipeline/ensembleEngine.ts` blends a
+  real, hand-trained logistic-regression classical model
+  (`classicalMlModel.ts`, trained via `scripts/trainClassicalModel.ts`) with
+  the quantum score (0.75/0.25 weighted, configurable) whenever the quantum
+  engine is reachable. The separate deterministic classical *rule* engine is
+  unchanged and still the outage-only fallback.
+- **Blockchain hardening** — a dedicated Middleware Fabric identity (not a
+  shared bank identity), 3-of-4 majority chaincode endorsement, 2 peers per
+  org. Still not deployable here: this environment's Docker daemon runs but
+  cannot pull any container image (confirmed 403s from the registry through
+  the sandbox network proxy), so a live Fabric network remains out of reach
+  regardless of code readiness.
+- **All 10 training dataset categories** — added distinct generators for
+  new-fraud-pattern, cross-institution, and temporal-behaviour records.
+- **Real shadow-mirror traffic** — `training/shadow_mirror.py` scores real
+  submitted Middleware transactions (when available) with both the frozen
+  champion and a challenger, falling back to the validation split when no
+  live traffic exists yet.
+- **Retraining/recalibration scheduler** — `training.cli daemon` runs the
+  documented cadence (continuous/weekly/monthly/quarterly checks) and
+  auto-invokes a training run when a trigger fires.
+- **Trigger E (quantum drift)** — now a real comparison against a rolling
+  registry baseline of quantum-specific metrics, not a no-op.
+- **Recalibration ordering + rollback** — the monotonicity check is now a
+  hard pre-filter before the Supervisor ever sees a candidate map (verified
+  with an injected non-monotonic candidate); `training.cli
+  recalibrate-rollback` reverts a model version to its previous champion
+  map, a specific historical map, or an identity map, instantly.
+- **Dashboard session auth + persistence** — `POST /api/dashboard/auth/login`
+  issues a JWT (seeded `exec-admin` / institution accounts); every other
+  Dashboard route requires it. Middleware's store is now SQLite-backed and
+  survives a restart.
 
 ## Structure
 
@@ -157,16 +211,19 @@ the running Quantum Engine above. Then `./.venv/Scripts/python -m training.cli r
   Dashboard API. This got tested for real this pass (see the `txId` bug
   above) — worth re-checking by hand after any Middleware response shape
   changes, since nothing catches this drift automatically.
-- Missing/undocumented pillars (the real 30-field Node API schema, live
-  Fabric CA identities) are called out in each `services/*/README.md` —
-  build order should probably follow whichever of those docs lands next.
-- Every dataset in the system so far is synthetic — there's no real
-  transaction history anywhere (Middleware is in-memory and ephemeral).
-  `services/quantum-pipeline`'s startup bootstrap is a tiny 26-sample set;
-  `services/training-pipeline` generates a much richer synthetic dataset
-  (1000+ records, temporal spread, seven labeled categories) but it's still
-  synthetic. Whichever pillar eventually owns real data ingestion should
-  replace both.
+- The remaining genuinely-open item is a live Fabric CA (still using static
+  `cryptogen` material) — called out in `services/blockchain/README.md`.
+  The 30-field Node API schema is done; see below.
+- Middleware's transaction/decision/feedback data is now persisted to
+  SQLite (`services/middleware/data/middleware.sqlite3`, gitignored) and
+  survives a restart — confirmed by killing and restarting the process and
+  re-querying a previously-submitted transaction. The PCA rolling sample
+  buffer and SSE connections remain legitimately in-memory/transient.
+  `services/quantum-pipeline`'s startup bootstrap is still a tiny 26-sample
+  synthetic set; `services/training-pipeline` generates a richer synthetic
+  dataset (1000+ records, temporal spread, all 10 spec-listed categories)
+  but it's still synthetic. Whichever pillar eventually owns real data
+  ingestion should replace both.
 - `services/training-pipeline`'s registry (`registry/index.json`,
   `registry/champion.json`, `registry/artifacts/`, plus recalibration's
   `registry/calibration_index.json` / `calibration_champions.json`) is
