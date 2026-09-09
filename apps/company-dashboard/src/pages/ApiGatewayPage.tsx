@@ -15,7 +15,7 @@ export function ApiGatewayPage() {
       </div>
       <Panel title="API Gateway" subtitle="Middleware's own request handling (metrics.ts) - the entry layer for all four APIs">
         <StatLine label="Node API" value="authenticated (x-api-key)" />
-        <StatLine label="Dashboard API" value="unauthenticated (reference implementation)" />
+        <StatLine label="Dashboard API" value="session-authenticated (JWT bearer token)" />
         <StatLine label="Blockchain API" value="outbound only - Middleware calls services/blockchain/gateway" />
         <StatLine label="Quantum Model API" value="outbound only - Middleware calls services/quantum-pipeline" />
       </Panel>
