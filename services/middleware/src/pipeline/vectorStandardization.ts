@@ -53,20 +53,54 @@ function totalQubitCost(features: QuantumEncodedFeature[]): number {
  * than dropped. Core risk fields (amount, flags) are never touched, per the
  * doc's note that PCA is applied "selectively... to preserve explainability
  * where regulators require it."
+ *
+ * Per the doc's 2.1: "If total qubit cost still exceeds budget after
+ * assignment, excess features route back through dimensionality reduction."
+ * A single per-field collapse pass isn't always enough (e.g. the default
+ * 13-field schema still costs 13 qubits against an 8-qubit budget after pass
+ * one) - previously that residual overflow was left for padOrTruncate below
+ * to silently truncate, which dropped whole low-index-order features
+ * (mfaUsed, deviceId, ipAddress, newDeviceFlag, submittedAt) from the vector
+ * actually sent to the quantum engine. Instead, route the excess back
+ * through a second reduction pass: merge the remaining low-priority,
+ * already-collapsed features into one shared amplitude component. Core risk
+ * fields (continuous numerics, binary flags, merchantCategory) are still
+ * never touched.
  */
 function reduceDimensionality(features: QuantumEncodedFeature[]): { features: QuantumEncodedFeature[]; reduced: boolean } {
   if (totalQubitCost(features) <= config.qubitBudget) {
     return { features, reduced: false };
   }
 
-  const reducible = new Set<QuantumEncodedFeature["encoding"] | string>(["categorical_low", "hashed", "timestamp"]);
-  const reduced = features.map((f): QuantumEncodedFeature => {
-    if (!reducible.has(f.type) || f.values.length <= 1) return f;
+  const reducibleTypes = new Set<string>(["categorical_low", "hashed", "timestamp"]);
+
+  // Pass 1: collapse each multi-value low-priority field to a single
+  // averaged component.
+  let current = features.map((f): QuantumEncodedFeature => {
+    if (!reducibleTypes.has(f.type) || f.values.length <= 1) return f;
     const avg = f.values.reduce((a, b) => a + b, 0) / f.values.length;
     return { ...f, values: [avg], encoding: "amplitude" };
   });
 
-  return { features: reduced, reduced: true };
+  // Pass 2 (route-back): if still over budget, merge the now-single-value
+  // low-priority fields into one shared amplitude feature instead of
+  // letting padOrTruncate below cut whole features off the end of the
+  // vector.
+  if (totalQubitCost(current) > config.qubitBudget) {
+    const mergeable = current.filter((f) => reducibleTypes.has(f.type));
+    const kept = current.filter((f) => !reducibleTypes.has(f.type));
+    if (mergeable.length > 1) {
+      const merged: QuantumEncodedFeature = {
+        name: "reduced_group",
+        type: "categorical_high",
+        values: [mergeable.reduce((sum, f) => sum + (f.values[0] ?? 0), 0) / mergeable.length],
+        encoding: "amplitude",
+      };
+      current = [...kept, merged];
+    }
+  }
+
+  return { features: current, reduced: true };
 }
 
 /**

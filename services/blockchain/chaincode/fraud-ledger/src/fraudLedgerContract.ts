@@ -36,6 +36,24 @@ export interface FraudDecisionRecord {
 const txKey = (txId: string) => `TX_${txId}`;
 const decisionKey = (txId: string) => `DECISION_${txId}`;
 
+/**
+ * Permission model (Section 5 of QBADS_Hyperledger_Fabric_Architecture.pdf):
+ * Bank / Wallet / Middleware -> submit transactions; Auditor -> read ledger
+ * only. RegulatorD is the Auditor org and must not be able to write state,
+ * even though the channel's Writers policy (an OR across all four orgs, for
+ * ordering-service availability) technically permits it to submit. Enforce
+ * the narrower business rule here, in chaincode, rather than relying on the
+ * channel policy alone.
+ */
+const AUDITOR_ONLY_MSPS = ["RegulatorDMSP"];
+
+function assertCanWrite(ctx: Context): void {
+  const mspId = ctx.clientIdentity.getMSPID();
+  if (AUDITOR_ONLY_MSPS.includes(mspId)) {
+    throw new Error(`${mspId} is an auditor identity (read ledger only) and may not submit transactions or decisions`);
+  }
+}
+
 function chaincodeTxTimestampIso(ctx: Context): string {
   const ts = ctx.stub.getTxTimestamp();
   const seconds = typeof ts.seconds.toNumber === "function" ? ts.seconds.toNumber() : Number(ts.seconds);
@@ -59,6 +77,7 @@ export class FraudLedgerContract extends Contract {
     payloadHash: string,
     submittedAt: string,
   ): Promise<void> {
+    assertCanWrite(ctx);
     if (!txId || !institutionId) {
       throw new Error("txId and institutionId are required");
     }
@@ -105,6 +124,7 @@ export class FraudLedgerContract extends Contract {
     decisionHash: string,
     decidedAt: string,
   ): Promise<void> {
+    assertCanWrite(ctx);
     const txBytes = await ctx.stub.getState(txKey(txId));
     if (txBytes.length === 0) {
       throw new Error(`Cannot record a decision for unknown transaction ${txId}`);
