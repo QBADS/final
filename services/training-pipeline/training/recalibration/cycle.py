@@ -8,6 +8,15 @@ gates - Section 03 step 4 frames this as "CANDIDATE MAP FITTING - METHODS
 COMPETE," the same competitive-candidates pattern
 ../ai_training_supervisor.py already uses for model promotion, rather than
 a strict escalate-only-on-failure sequence.
+
+Per-candidate call order (Section 05): fit -> monotonicity pre-filter ->
+AI Recalibration Supervisor -> gates. "A calibration map may only be a
+monotonic transform of the raw score. Any candidate that reorders two
+score bands out of rank... is discarded before it reaches the Supervisor."
+`_reject_non_monotonic` below is that hard pre-filter: a non-monotonic
+candidate is turned into a rejected outcome directly and `supervisor.evaluate`
+is never called on it - not even to have the Supervisor assign it a fail
+score. Only candidates that pass the pre-filter reach `supervisor_evaluate`.
 """
 
 import logging
@@ -18,11 +27,11 @@ import requests
 from .. import registry as model_registry
 from ..config import settings
 from . import registry as cal_registry
-from .gates import RecalibrationGateOutcome, evaluate_gates
-from .methods import FITTERS, CalibrationMap, identity_map
+from .gates import GateResult, RecalibrationGateOutcome, evaluate_gates
+from .methods import FITTERS, CalibrationMap, identity_map, is_monotonic
 from .reliability import ReliabilityReport, analyze_reliability
 from .score_collection import ScoreCollection, collect_scores
-from .supervisor import SupervisorVerdict, evaluate as supervisor_evaluate
+from .supervisor import RankSafetyCheck, SupervisorVerdict, evaluate as supervisor_evaluate
 
 logger = logging.getLogger("training-pipeline.recalibration")
 
@@ -57,7 +66,46 @@ def _current_baseline_map(model_type: str, model_version: str) -> CalibrationMap
     return CalibrationMap(method=existing["method"], params=existing["params"])
 
 
-def _deploy(model_type: str, model_version: str, entry: dict) -> bool:
+def _reject_non_monotonic(cal_map: CalibrationMap) -> CandidateMapOutcome:
+    """Hard pre-filter outcome for a candidate map that fails the Section 05
+    monotonicity constraint. Built directly, without calling
+    `supervisor.evaluate` - the candidate is discarded before it ever
+    reaches the AI Recalibration Supervisor, per the spec's call order."""
+    rank_safety = RankSafetyCheck(
+        monotonic=False,
+        recall_before=0.0,
+        recall_after=0.0,
+        precision_before=0.0,
+        precision_after=0.0,
+        threshold_population_shift_pct=0.0,
+        passed=False,
+    )
+    verdict = SupervisorVerdict(
+        method=cal_map.method,
+        reliability_score=0.0,
+        rank_safety=rank_safety,
+        operational_score=0.0,
+        recalibration_score=0.0,
+        recommend=False,
+        findings={
+            "reliability": {"brierBefore": None, "brierAfter": None, "eceBefore": None, "eceAfter": None},
+            "operational": {"latencyMs": None, "holdoutSamples": None, "sampleAdequate": None},
+            "preFilterRejected": True,
+            "preFilterReason": "candidate map is not monotonic - discarded before it reached the Supervisor (Section 05)",
+        },
+    )
+    fidelity_gate = GateResult(
+        name="fidelity",
+        passed=False,
+        ran=True,
+        reasons=["candidate map is not monotonic - rejected by the pre-Supervisor monotonicity filter, never scored"],
+    )
+    deployment_gate = GateResult(name="skipped", passed=False, ran=False, reasons=["upstream gate failed"])
+    gates = RecalibrationGateOutcome(fidelity_gate=fidelity_gate, deployment_gate=deployment_gate)
+    return CandidateMapOutcome(cal_map=cal_map, verdict=verdict, gates=gates)
+
+
+def deploy_calibration_map(model_type: str, model_version: str, entry: dict) -> bool:
     try:
         res = requests.post(
             f"{settings.quantum_engine_url}/models/recalibrate",
@@ -97,6 +145,15 @@ def run_recalibration_cycle() -> RecalibrationCycleResult:
     outcomes: list[CandidateMapOutcome] = []
     for method in methods_to_try:
         cal_map = FITTERS[method](scores.raw_scores, scores.outcomes)
+
+        # Hard pre-filter (Section 05), run BEFORE the Supervisor ever sees
+        # the candidate: a non-monotonic map is discarded here and never
+        # passed into supervisor_evaluate at all.
+        if not is_monotonic(cal_map):
+            logger.info("%s: REJECTED before reaching the Supervisor - candidate map is not monotonic", method)
+            outcomes.append(_reject_non_monotonic(cal_map))
+            continue
+
         verdict = supervisor_evaluate(cal_map, scores.raw_scores, scores.outcomes, baseline_reliability)
         gate_outcome = evaluate_gates(verdict)
         logger.info(
@@ -118,7 +175,7 @@ def run_recalibration_cycle() -> RecalibrationCycleResult:
         )
         if outcome is winner:
             cal_registry.set_calibration_champion(entry)
-            deployed = _deploy(model_type, model_version, entry)
+            deployed = deploy_calibration_map(model_type, model_version, entry)
 
     logger.info(
         "=== recalibration cycle complete: %s ===",

@@ -61,10 +61,14 @@ curl -X POST localhost:4000/api/node/transactions/batch \
   -H "x-api-key: qbads_sandbox_novafintech" -H "content-type: application/json" \
   -d '{"transactions":[{"amount":120,"currency":"USD","paymentChannel":"card"},{"amount":9000,"currency":"USD","paymentChannel":"crypto","crossBorderFlag":true}]}'
 
-curl localhost:4000/api/dashboard/kpis
-curl localhost:4000/api/dashboard/institutions
-curl localhost:4000/api/dashboard/platform-health
-curl localhost:4000/api/dashboard/live-feed   # SSE
+TOKEN=$(curl -s -X POST localhost:4000/api/dashboard/auth/login \
+  -H "content-type: application/json" \
+  -d '{"username":"exec-admin","password":"qbads-exec-admin-2026"}' | jq -r .token)
+
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/kpis
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/institutions
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/platform-health
+curl "localhost:4000/api/dashboard/live-feed?token=$TOKEN"   # SSE - EventSource can't set headers, so token is a query param here
 ```
 
 Sandbox API keys (seeded in `store/inMemoryStore.ts`, one per institution):
@@ -82,8 +86,9 @@ detection / Case management), `/platform-health`, `/quantum-info` (full
 model roster), `/blockchain-info`, `/security` (real auth-failure log +
 masked keys), `/config` (non-secret runtime thresholds),
 `/feature-pipeline` (Stage 1's field classification + recent warnings),
-`/ticker`, `/volume-series`, `/model-performance`, `/live-feed` (SSE). All
-unauthenticated - see "Not done here."
+`/ticker`, `/volume-series`, `/model-performance`, `/live-feed` (SSE), plus
+`/auth/login` and `/auth/logout`. All require a session bearer token except
+`/auth/login` - see "Persistence and Dashboard session auth" below.
 
 ## What's real vs. mocked
 
@@ -105,12 +110,29 @@ unauthenticated - see "Not done here."
 | `/feature-pipeline` field config + warnings | Real - it's `featureEngineering.ts`'s actual `FIELD_CONFIG` and genuine Stage 1 imputation/quarantine warnings from live submissions |
 | `/quantum-info`, `/blockchain-info` | Real passthrough of each service's own state - honestly reports unreachable/empty rather than fabricating a roster |
 
-## Not done here
+## Persistence and Dashboard session auth
 
-- Persistent storage (everything resets on restart - including the request
-  metrics `metrics.ts` reports and the transactions `platform-health`/`kpis`
-  are computed from).
-- Session auth in front of the Dashboard API (currently open - both
-  dashboards call it directly with no login flow; Node Dash is instead
-  fixed to reading one seeded institution's data, see its own README).
+Both former "Not done here" gaps are now implemented:
+
+- **Persistent storage**: `store/inMemoryStore.ts` is now a write-through
+  cache backed by SQLite (`store/db.ts`, Node's built-in `node:sqlite` -
+  no new dependency; this Node version, `node -v`, ships it natively).
+  Institutions, transactions, decisions, feedback, auth-failure events, and
+  pipeline warnings all survive a restart; the DB file (default
+  `services/middleware/data/middleware.sqlite3`, overridable via
+  `MIDDLEWARE_DB_PATH`, gitignored as runtime state) is created and seeded
+  with the same sandbox institutions/API keys on first run. The PCA rolling
+  sample buffer and SSE subscriber connections stay in-memory-only
+  deliberately - transient warm-up/runtime state, not records of anything
+  that happened.
+- **Dashboard API session auth**: `auth/dashboardAuth.ts` adds
+  `POST /api/dashboard/auth/login` (username/password, scrypt-hashed
+  seeded accounts - `exec-admin` for Company Dash, `novafintech`/
+  `institution` role scoped to `inst-2` for Node Dash) and
+  `POST /api/dashboard/auth/logout`, issuing/revoking short-lived signed
+  JWTs (`jsonwebtoken`). Every other Dashboard API route requires a valid
+  `Authorization: Bearer <token>` (or `?token=` for the SSE `/live-feed`
+  route, since `EventSource` can't set custom headers); the `institution`
+  role is scoped server-side to its own institution's data. The Node API's
+  per-institution `x-api-key` auth (`auth.ts`) is unchanged.
 

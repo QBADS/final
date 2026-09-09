@@ -20,6 +20,13 @@ VALID_CATEGORIES = {
     "suspicious_reviewed",
     "synthetic_fraud",
     "adversarial",
+    # Section 03's remaining three categories - see data_acquisition.py's
+    # `_generate_new_fraud_pattern_records` / `_generate_cross_institution_records`
+    # / `_generate_temporal_behaviour_records` for how each is made genuinely
+    # distinct rather than a relabeled copy of one of the seven above.
+    "new_fraud_pattern",
+    "cross_institution",
+    "temporal_behaviour",
 }
 
 # Below this share, the minority class is thin enough that a model can hit
@@ -39,6 +46,12 @@ class QualityReport:
     pii_fields_detected: list
     passed: bool
     reasons: list = field(default_factory=list)
+    # Section 03's ten documented dataset categories - present with a real
+    # (possibly zero) count each, so a caller can see at a glance whether
+    # all ten are actually represented rather than counting non-zero keys.
+    category_counts: dict = field(default_factory=dict)
+    categories_present: int = 0
+    categories_missing: list = field(default_factory=list)
 
 
 def _record_hash(r: TrainingRecord) -> str:
@@ -103,6 +116,18 @@ def run_quality_checks(records: list[TrainingRecord]) -> tuple[list[TrainingReco
     if pii_found:
         reasons.append(f"disallowed PII-shaped fields present: {pii_found}")
 
+    # Category coverage - report every one of the ten documented categories
+    # (Section 03) with its real count, zero included, rather than only the
+    # ones that happen to be non-empty.
+    category_counts = {cat: 0 for cat in sorted(VALID_CATEGORIES)}
+    for r in clean:
+        if r.category in category_counts:
+            category_counts[r.category] += 1
+    categories_missing = sorted(cat for cat, count in category_counts.items() if count == 0)
+    categories_present = len(VALID_CATEGORIES) - len(categories_missing)
+    if categories_missing:
+        reasons.append(f"dataset categories with zero records: {categories_missing}")
+
     passed = not invalid_label and not pii_found and minority_share >= MIN_MINORITY_CLASS_SHARE
 
     report = QualityReport(
@@ -115,5 +140,8 @@ def run_quality_checks(records: list[TrainingRecord]) -> tuple[list[TrainingReco
         pii_fields_detected=pii_found,
         passed=passed,
         reasons=reasons,
+        category_counts=category_counts,
+        categories_present=categories_present,
+        categories_missing=categories_missing,
     )
     return clean, report

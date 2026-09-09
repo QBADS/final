@@ -11,6 +11,8 @@ table, so wiring in a real scheduler later is "call these on a timer," not
 
 from dataclasses import dataclass
 
+import numpy as np
+
 SCHEDULED_CADENCE = {
     "continuous": "Collect confirmed outcomes and monitor live performance",
     "daily": "Data-quality and drift analysis",
@@ -28,6 +30,38 @@ class TriggerEvaluation:
     reason: str
 
 
+def compute_quantum_drift_score(
+    current_noise_sensitivity: float,
+    current_circuit_depth: float,
+    historical_noise_sensitivities: list[float],
+    historical_circuit_depths: list[float],
+) -> float:
+    """Trigger E's real signal, mirroring how Trigger C's `data_drift_score`
+    is computed by its caller: a rolling historical baseline (mean of the
+    same model type's past cycles, pulled from the registry by
+    `trigger_runner.check_triggers_now`) compared against the current
+    candidate/champion's own quantum-specific benchmarking.py metrics
+    (noise-sensitivity under input perturbation, circuit-depth). Returns a
+    0-1+ relative-deviation score, the larger of the two metrics' relative
+    deviation from their own rolling mean - a real, useful measure of
+    simulator-level circuit/backend behavior drift between training runs,
+    not a claim about live QPU backend drift (there is no QPU here).
+
+    With no history yet (first cycle for this model type) there is nothing
+    to drift from, so this returns 0.0 rather than fabricating a baseline.
+    """
+    if not historical_noise_sensitivities or not historical_circuit_depths:
+        return 0.0
+
+    baseline_noise = float(np.mean(historical_noise_sensitivities))
+    baseline_depth = float(np.mean(historical_circuit_depths))
+
+    noise_dev = abs(current_noise_sensitivity - baseline_noise) / max(baseline_noise, 1e-6)
+    depth_dev = abs(current_circuit_depth - baseline_depth) / max(baseline_depth, 1e-6)
+
+    return float(max(noise_dev, depth_dev))
+
+
 def evaluate_triggers(
     *,
     current_recall: float,
@@ -39,13 +73,17 @@ def evaluate_triggers(
     recall_floor: float = 0.5,
     fnr_spike_threshold: float = 0.1,
     drift_threshold: float = 0.25,
+    quantum_drift_score: float = 0.0,  # see compute_quantum_drift_score() above; caller supplies it
+    quantum_drift_threshold: float = 0.35,
 ) -> list[TriggerEvaluation]:
     """
     Section 10's five triggers (A-E). E (quantum drift) is explicitly
-    marked in the doc as "identified as a future capability" - included
-    here as a permanently-not-fired stub for completeness, not evaluated,
-    since there's no cross-backend comparison to detect it against (see
-    ai_training_supervisor.py's quantum-quality "backend_drift: n/a" note).
+    marked in the doc as "a future capability" - it's implemented here for
+    real (see compute_quantum_drift_score above), scoped honestly: this
+    detects simulator-level circuit/backend behavior drift between training
+    runs (noise-sensitivity + circuit-depth deviation from a rolling
+    registry baseline), not real live QPU backend drift, since there is no
+    QPU in this repo to drift.
     """
     evaluations = []
 
@@ -85,8 +123,12 @@ def evaluate_triggers(
     evaluations.append(
         TriggerEvaluation(
             trigger="E_quantum_drift",
-            fired=False,
-            reason="not implemented - doc marks this a future capability, no cross-backend signal exists yet",
+            fired=quantum_drift_score > quantum_drift_threshold,
+            reason=(
+                f"quantum backend drift score {quantum_drift_score:.3f} vs threshold {quantum_drift_threshold} "
+                "(noise-sensitivity + circuit-depth deviation from rolling registry baseline; "
+                "simulator-level only - no live QPU backend to compare against)"
+            ),
         )
     )
 

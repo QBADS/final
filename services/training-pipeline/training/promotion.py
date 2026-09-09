@@ -7,17 +7,19 @@ challenger becomes champion only after every predefined gate is satisfied."
 "Rejection at any stage returns the candidate to the model lab; the
 incumbent champion stays live."
 
-Shadow/Canary below are simplified: the real thing needs live production
-traffic mirrored to a candidate (shadow) and a small percentage of real
-traffic routed to it (canary), neither of which this repo has anywhere -
-Middleware calls the Quantum Engine directly with no mirroring/routing
-layer. What's implemented is a second, independent re-evaluation pass
-standing in for those stages, clearly logged as such rather than silently
-treated as equivalent to the real thing.
+Shadow/Canary: `_shadow_canary_recheck` below is a second, independent
+re-evaluation pass on the validation split and a random subset - a real
+stress test regardless of live traffic, kept as-is. Alongside it,
+`shadow_mirror.mirror_and_compare` (shadow_mirror.py) is the genuine
+traffic-mirroring mechanism: real Middleware transactions when that service
+is running, scored by both the frozen champion and the challenger, compared
+for agreement/drift - with a documented fallback to the validation split
+when no real traffic exists yet. See shadow_mirror.py's module docstring
+for exactly how "real" is real here and what the fallback covers.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import requests
@@ -31,6 +33,7 @@ from .data_quality import QualityReport, run_quality_checks
 from .dataset_builder import DatasetBundle, build_datasets
 from .gates import GateOutcome, evaluate_gates
 from .models import TRAINERS, TrainedCandidate
+from .shadow_mirror import ShadowMirrorReport, mirror_and_compare
 
 logger = logging.getLogger("training-pipeline.promotion")
 
@@ -43,6 +46,7 @@ class CandidateOutcome:
     gates: GateOutcome
     shadow_consistent: bool | None = None
     canary_consistent: bool | None = None
+    shadow_mirror: ShadowMirrorReport | None = None
 
 
 @dataclass
@@ -134,10 +138,19 @@ def run_training_cycle() -> CycleResult:
             logger.info("%s passed all gates but failed shadow/canary recheck - not promoted", winner.candidate.model_type)
             winner = None
 
+    if winner is not None:
+        # Real traffic-mirroring step, additional to the recheck above -
+        # see shadow_mirror.py. Informational (agreement rate/score drift
+        # logged and persisted to the registry entry), not a fourth gate -
+        # the doc's three gates (gates.py) remain the sole promotion
+        # decision; this is the "shadow" observability Section 08 asks for.
+        winner.shadow_mirror = mirror_and_compare(champion_entry, winner.candidate, bundle)
+
     for outcome in outcomes:
         entry = registry.save_candidate(
             cycle, outcome.candidate, outcome.benchmark, outcome.supervisor, outcome.gates,
             promoted=(outcome is winner),
+            shadow_mirror=asdict(outcome.shadow_mirror) if outcome.shadow_mirror else None,
         )
         if outcome is winner:
             registry.set_champion(entry)

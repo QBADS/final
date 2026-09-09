@@ -26,6 +26,24 @@ export const config = {
   reviewThreshold: Number(process.env.REVIEW_THRESHOLD ?? 40),
   fraudThreshold: Number(process.env.FRAUD_THRESHOLD ?? 75),
 
+  // Ensemble weights (pipeline/ensembleEngine.ts): when the quantum engine
+  // is reachable, the final risk score blends the quantum model's score
+  // with the classical ML model's (pipeline/classicalMlModel.ts - logistic
+  // regression) score, ensembleQuantumWeight * quantumScore +
+  // ensembleClassicalWeight * classicalScore. Quantum is weighted higher
+  // since it's this platform's primary detection signal per the
+  // architecture spec ("AI & quantum detection engine"); the classical
+  // model is a fast, corroborating second opinion that pulls the score down
+  // when it disagrees, not a coequal vote. 0.75/0.25 keeps quantum
+  // dominant while still measurably moving the final score whenever the two
+  // models disagree - unlike a token 95/5 split, which would make the
+  // "ensemble" indistinguishable from a pass-through in practice. Kept
+  // independent of, and unrelated to, classicalRuleEngine.ts's fallback
+  // decisions or responseInterpretation.ts's own small rule-based
+  // calibration blend on the quantum score.
+  ensembleQuantumWeight: Number(process.env.ENSEMBLE_QUANTUM_WEIGHT ?? 0.75),
+  ensembleClassicalWeight: Number(process.env.ENSEMBLE_CLASSICAL_WEIGHT ?? 0.25),
+
   // services/blockchain/gateway - not required to be running; writes are
   // best-effort so the pipeline stays responsive per the Middleware doc's
   // "deterministic under failure" principle.

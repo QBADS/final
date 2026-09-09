@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LiveFeedEvent } from "@qbads/types";
-import { API_BASE } from "./apiClient";
+import { dashboardEventSourceUrl } from "./apiClient";
 
 /** Polls `fetchFn` on an interval, keeping the last known value on a transient failure. */
 export function usePoll<T>(fetchFn: () => Promise<T>, intervalMs: number, initial: T): T {
@@ -35,13 +35,24 @@ export function useLiveFeed(institutionName: string | null, max = 8): LiveFeedEv
 
   useEffect(() => {
     if (!institutionName) return;
-    const source = new EventSource(`${API_BASE}/api/dashboard/live-feed`);
-    source.onmessage = (msg) => {
-      const event = JSON.parse(msg.data) as LiveFeedEvent;
-      if (event.institutionName !== institutionName) return;
-      setEvents((prev) => [event, ...prev].slice(0, max));
+    let cancelled = false;
+    let source: EventSource | undefined;
+    // The Dashboard API's live-feed SSE endpoint requires a session token;
+    // EventSource can't set an Authorization header, so it goes as ?token=
+    // (dashboardEventSourceUrl - see auth/dashboardAuth.ts).
+    void dashboardEventSourceUrl("/api/dashboard/live-feed").then((url) => {
+      if (cancelled) return;
+      source = new EventSource(url);
+      source.onmessage = (msg) => {
+        const event = JSON.parse(msg.data) as LiveFeedEvent;
+        if (event.institutionName !== institutionName) return;
+        setEvents((prev) => [event, ...prev].slice(0, max));
+      };
+    });
+    return () => {
+      cancelled = true;
+      source?.close();
     };
-    return () => source.close();
   }, [institutionName, max]);
 
   return events;

@@ -1,6 +1,31 @@
 # cryptogen config for the QBADS Fabric network.
 # Orgs mirror QBADS_Hyperledger_Fabric_Architecture.pdf Section 2:
 # Organization A/B (Bank), Organization C (Financial Institution), Organization D (Regulator).
+# There is NO 5th "Middleware" org: Section 2 fixes the consortium at these
+# four, and Section 5's Middleware row is an application-layer client role,
+# not a ledger-owning org (it holds no peers, no anchor, no MSP admin - it
+# only reads events and submits transactions through the gateway). Standing
+# up a MiddlewareMSP would be architecturally wrong here. Instead, per-org
+# `Users.Count` below provisions a *second*, non-admin client identity under
+# BankA (User2) that the gateway (services/blockchain/gateway) signs as
+# instead of BankA's own User1 - see gateway/src/config.ts and
+# chaincode/fraud-ledger/src/fraudLedgerContract.ts for how that identity is
+# consumed and recognized as distinct from BankA's own operational identity.
+#
+# NOTE: `cryptogen`'s Users.Count only supports sequential, auto-named
+# identities (User1, User2, ...) - there's no way to hand it a custom CN like
+# "Middleware" without switching to a real Fabric CA (registration lets you
+# name identities and attach custom attributes, e.g. role=middleware, for
+# ABAC in chaincode). That CA migration is still open (see README "Not done
+# here"); User2@banka.qbads.com is the static-crypto-material equivalent for
+# now, and is exactly what `cryptogen generate --config=crypto-config.yaml`
+# will mint the moment this can run against a real Docker daemon.
+#
+# Each peer org also now has Template.Count: 2 (peer0 + peer1) instead of 1,
+# so the majority endorsement policy in
+# network/scripts/deploy-chaincode.sh (and docker-compose.yaml's peer1.*
+# services) is backed by real per-org fault tolerance rather than a
+# majority-of-one.
 OrdererOrgs:
   - Name: Orderer
     Domain: qbads.com
@@ -15,15 +40,20 @@ PeerOrgs:
     Domain: banka.qbads.com
     EnableNodeOUs: true
     Template:
-      Count: 1
+      Count: 2 # peer0 (existing) + peer1, for majority endorsement fault tolerance
     Users:
-      Count: 1
+      # User1 = BankA's own operational client identity (unchanged).
+      # User2 = dedicated Middleware application identity (NEW). The gateway
+      # (gateway/src/config.ts) signs as User2, not User1, and chaincode
+      # (assertIsMiddleware in fraudLedgerContract.ts) recognizes it by CN
+      # distinctly from BankA's own identity.
+      Count: 2
 
   - Name: BankB
     Domain: bankb.qbads.com
     EnableNodeOUs: true
     Template:
-      Count: 1
+      Count: 2 # peer0 + peer1
     Users:
       Count: 1
 
@@ -31,7 +61,7 @@ PeerOrgs:
     Domain: institutionc.qbads.com
     EnableNodeOUs: true
     Template:
-      Count: 1
+      Count: 2 # peer0 + peer1
     Users:
       Count: 1
 
@@ -39,6 +69,6 @@ PeerOrgs:
     Domain: regulatord.qbads.com
     EnableNodeOUs: true
     Template:
-      Count: 1
+      Count: 2 # peer0 + peer1
     Users:
       Count: 1

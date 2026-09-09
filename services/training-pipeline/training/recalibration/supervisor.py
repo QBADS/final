@@ -8,6 +8,15 @@ evaluation. Rank Safety stays a hard, deterministic floor independent of
 the Supervisor's score." Mirrors training/ai_training_supervisor.py's own
 rule for model promotion - gates.py's Gate 1 re-checks rank safety
 independently of whatever this recommends, same pattern.
+
+Monotonicity itself (Section 05: "a calibration map may only be a
+monotonic transform of the raw score... discarded before it reaches the
+Supervisor") is enforced upstream, in cycle.py, as a hard pre-filter on
+the freshly-fitted candidate - a non-monotonic map never reaches
+`evaluate` below at all. The `monotonic` field on `RankSafetyCheck` here
+is therefore always True by the time this module runs; it stays part of
+the record purely as a redundant confirmation/telemetry field, not as the
+enforcement point.
 """
 
 import time

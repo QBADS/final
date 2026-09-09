@@ -114,6 +114,22 @@ export interface FraudDecisionRecord {
   decisionHash?: string;
   /** Wall-clock time for Stage 1/2 + quantum-or-fallback + decisioning, measured in nodeApi.ts. */
   pipelineLatencyMs: number;
+
+  // ---- Ensemble transparency (pipeline/ensembleEngine.ts) ----
+  // Populated only on the quantum-success path (source === "quantum_model"),
+  // where riskScore is a genuine weighted blend of these two component
+  // scores rather than the quantum score alone - undefined on the
+  // classical-fallback path, which has no ensemble (classicalRuleEngine.ts
+  // runs alone there). Exposed for audit-trail/dashboard transparency into
+  // what actually produced riskScore.
+  /** The quantum model's own 0-100 component score before ensembling. */
+  quantumComponentScore?: number;
+  /** The classical ML model's (classicalMlModel.ts) 0-100 component score before ensembling. */
+  classicalMlComponentScore?: number;
+  /** The classical ML model's own 0-1 confidence in classicalMlComponentScore. */
+  classicalMlConfidence?: number;
+  /** The weights actually used to blend the two component scores into riskScore. */
+  ensembleWeights?: { quantum: number; classicalMl: number };
 }
 
 // Post-Stage1 (validated/imputed) transaction, as actually persisted and

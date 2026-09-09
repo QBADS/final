@@ -30,6 +30,11 @@ class RecalibrationGateOutcome:
 
 
 def _gate1_fidelity(verdict: SupervisorVerdict) -> GateResult:
+    """By the time a verdict reaches here, cycle.py's pre-Supervisor
+    monotonicity filter has already discarded any non-monotonic candidate
+    (Section 05) - `verdict.rank_safety.monotonic` is re-checked below only
+    as a defensive, redundant confirmation of that invariant, not as the
+    primary enforcement point."""
     reasons = []
     passed = True
 

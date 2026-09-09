@@ -11,10 +11,86 @@ import type { FraudDecision, FraudStats, Institution, PlatformHealth, PlatformKp
 
 export const API_BASE = import.meta.env.VITE_MIDDLEWARE_URL ?? "http://localhost:4000";
 
+/**
+ * Dashboard API session auth (services/middleware/src/auth/dashboardAuth.ts
+ * - README's former "Not done here: Session auth in front of the Dashboard
+ * API" is now implemented). Company Dash is QBADS staff's internal tool
+ * (the architecture mockup's "role: exec-admin" footer), so rather than
+ * building a standalone login page/route here, this client transparently
+ * logs in with the seeded exec-admin sandbox account on first use and
+ * attaches the resulting bearer token to every Dashboard API call,
+ * re-logging in once on a 401 (e.g. an expired token). The token is cached
+ * in localStorage only, per-browser, same trust level as this whole
+ * reference app.
+ */
+const TOKEN_STORAGE_KEY = "qbads.companyDashboard.dashboardToken";
+const DASHBOARD_USERNAME = import.meta.env.VITE_DASHBOARD_USERNAME ?? "exec-admin";
+const DASHBOARD_PASSWORD = import.meta.env.VITE_DASHBOARD_PASSWORD ?? "qbads-exec-admin-2026";
+
+function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // localStorage unavailable (private browsing, etc.) - fall back to an
+    // in-memory token for the life of this page load.
+  }
+}
+
+let inMemoryToken: string | null = null;
+let loginPromise: Promise<string> | null = null;
+
+async function login(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/dashboard/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: DASHBOARD_USERNAME, password: DASHBOARD_PASSWORD }),
+  });
+  if (!res.ok) throw new Error(`dashboard login failed -> ${res.status}`);
+  const body = (await res.json()) as { token: string };
+  inMemoryToken = body.token;
+  setStoredToken(body.token);
+  return body.token;
+}
+
+async function ensureToken(): Promise<string> {
+  const cached = inMemoryToken ?? getStoredToken();
+  if (cached) {
+    inMemoryToken = cached;
+    return cached;
+  }
+  loginPromise ??= login().finally(() => {
+    loginPromise = null;
+  });
+  return loginPromise;
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const token = await ensureToken();
+  let res = await fetch(`${API_BASE}${path}`, { headers: { authorization: `Bearer ${token}` } });
+  if (res.status === 401) {
+    // Token expired/invalid - log in once more and retry a single time.
+    inMemoryToken = null;
+    const fresh = await login();
+    res = await fetch(`${API_BASE}${path}`, { headers: { authorization: `Bearer ${fresh}` } });
+  }
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
   return (await res.json()) as T;
+}
+
+/** Same auth as getJson, plus a `token=` query param for EventSource (SSE),
+ * which cannot set custom request headers - see dashboardAuth.ts. */
+export async function dashboardEventSourceUrl(path: string): Promise<string> {
+  const token = await ensureToken();
+  const sep = path.includes("?") ? "&" : "?";
+  return `${API_BASE}${path}${sep}token=${encodeURIComponent(token)}`;
 }
 
 export const kindLabel: Record<Institution["kind"], string> = {

@@ -56,7 +56,7 @@ export async function processIngestedTransaction(txId: string, rawBody: Record<s
   void recordTransactionOnChain(storedTx, payloadHash)
     .then((ok) => ok && recordDecisionOnChain(outcome.decision))
     .then((ok) => {
-      if (ok) storedTx.chainConfirmed = true;
+      if (ok) store.markTransactionChainConfirmed(txId);
     });
 
   return outcome;
