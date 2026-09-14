@@ -4,7 +4,7 @@ from qiskit_algorithms.optimizers import COBYLA
 from qiskit_machine_learning.algorithms import VQC
 
 from ..config import settings
-from ..execution_manager import get_sampler
+from ..execution_manager import get_pass_manager, get_sampler
 from .base import QuantumFraudModel
 
 
@@ -28,6 +28,8 @@ class VQCModel(QuantumFraudModel):
             ansatz=self._ansatz,
             optimizer=COBYLA(maxiter=50),
             sampler=get_sampler(),
+            # See QNNModel's identical pass_manager wiring in qnn.py.
+            pass_manager=get_pass_manager(),
         )
         self._fitted = False
 

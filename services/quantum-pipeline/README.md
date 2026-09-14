@@ -20,7 +20,7 @@ actually running these circuits.
 ```
 app/
   config.py                    feature dimension, backend mode, thresholds
-  execution_manager.py    "simulator vs noise-aware vs QPU" seam (only simulator implemented)
+  execution_manager.py    "simulator vs noise-aware vs QPU" seam - simulator and real IBM QPU both implemented
   bootstrap_data.py        synthetic dataset stand-in for real training data (none exists yet)
   postprocessing.py         anomaly score -> risk level
   calibration.py                applies a fitted Platt/temperature/isotonic map - see "Recalibration" below
@@ -82,7 +82,64 @@ built once for a fixed qubit count, not reconstructed per request.
 | `POST /models/deploy` | Real - verified end to end: a training-pipeline cycle promoted a QNN candidate, deployed it here, and `GET /models` + `POST /infer` confirmed the new weights serving real inferences afterward |
 | Response signing | Placeholder - a SHA-256 hash, not a real cryptographic signature (no PKI/HSM infra) |
 | Continuous learning feedback (`/feedback`) | Stores ground truth only - per the doc, the engine "does not train live". `services/training-pipeline` exists now but generates its own synthetic labels rather than consuming this queue - see its README |
-| Execution Manager | Only `backend_mode=simulator` implemented; noise-aware simulator and real QPU are unimplemented seams |
+| Execution Manager | `backend_mode=simulator` (default) and `backend_mode=ibm_qpu` (real IBM Quantum Platform, see "Connecting to IBM Quantum" below) both implemented; noise-aware simulator is still an unimplemented seam |
+
+## Connecting to IBM Quantum
+
+`execution_manager.py` is the only module that knows a hardware backend
+exists - every model (`qsvm.py`, `qnn.py`, `vqc.py`) asks it for a
+primitive/kernel/pass-manager rather than constructing one itself, so
+routing to real IBM hardware is a config change, not a code change in the
+model layer.
+
+```bash
+BACKEND_MODE=ibm_qpu
+IBM_QUANTUM_TOKEN=<your API key, from quantum.cloud.ibm.com>
+IBM_QUANTUM_INSTANCE=<your instance CRN>
+IBM_QUANTUM_CHANNEL=ibm_cloud          # default; or ibm_quantum_platform
+IBM_QUANTUM_BACKEND=ibm_torino         # optional - omit to auto-pick the least-busy real device
+```
+
+That's the whole production path: `QiskitRuntimeService` authenticates,
+picks (or is told) a backend, and every circuit is transpiled to that
+backend's real coupling map/basis gates via a preset pass manager before
+running - `EstimatorV2`/`SamplerV2` for QNN/VQC, `ComputeUncompute` +
+`FidelityQuantumKernel` for QSVM (QSVM doesn't use an Estimator/Sampler
+directly on the simulator path either - `get_quantum_kernel()` in
+`execution_manager.py` is what routes it correctly on both backends,
+fixing a real gap where QSVM used to bypass the Execution Manager
+entirely and could never have run on hardware even if `ibm_qpu` mode
+existed).
+
+**What's actually verified vs. what isn't.** This was built and tested end
+to end against `qiskit_ibm_runtime.fake_provider.FakeSherbrooke` - a fake
+backend that carries IBM's real 127-qubit Eagle device's exact coupling
+map and basis gate set and executes entirely locally (no network, no
+account):
+
+```bash
+BACKEND_MODE=ibm_qpu IBM_QUANTUM_FAKE_BACKEND=FakeSherbrooke \
+  ./.venv/Scripts/python -m uvicorn app.main:app --port 4002
+```
+
+All three models trained and served real inferences through this path -
+proof the ISA-transpilation and primitive-invocation mechanics are
+correct. It has **not** been exercised against a live IBM account: this
+sandbox's network egress proxy blocks IBM's cloud API hosts
+(`quantum.cloud.ibm.com`, `cloud.ibm.com`) the same way it blocks Docker
+Hub - confirmed by testing, not assumed. Pointing this at a real account
+needs a real token/instance and network reachability this environment
+doesn't have; no further code changes.
+
+`IBM_QUANTUM_FAKE_BACKEND` is a dev/test override only - never set it in a
+real deployment, since it silently makes `ibm_qpu` mode not touch hardware
+at all.
+
+Real-QPU latency is a different world from the simulator numbers above:
+expect real queue time on top of execution, and IBM bills QPU time by the
+second. `SHOTS` (default 1024) directly trades cost/latency for precision
+on that path - worth tuning down for interactive per-transaction inference
+before pointing this at billed hardware.
 
 ## Recalibration
 

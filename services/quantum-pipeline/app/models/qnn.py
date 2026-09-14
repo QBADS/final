@@ -5,7 +5,7 @@ from qiskit_machine_learning.algorithms.classifiers import NeuralNetworkClassifi
 from qiskit_machine_learning.neural_networks import EstimatorQNN
 
 from ..config import settings
-from ..execution_manager import get_estimator
+from ..execution_manager import get_estimator, get_pass_manager
 from .base import QuantumFraudModel
 
 
@@ -32,6 +32,12 @@ class QNNModel(QuantumFraudModel):
             estimator=get_estimator(),
             input_params=self._feature_map.parameters,
             weight_params=self._ansatz.parameters,
+            # None on the simulator; an ISA-targeting pass manager on
+            # backend_mode=ibm_qpu (see execution_manager.get_pass_manager) -
+            # qiskit-machine-learning transpiles internally before every
+            # Estimator call when this is set, which is the supported way
+            # to satisfy IBM Runtime primitives' ISA-circuit requirement.
+            pass_manager=get_pass_manager(),
         )
         self._classifier = NeuralNetworkClassifier(neural_network=self._qnn, optimizer=COBYLA(maxiter=50))
         self._fitted = False

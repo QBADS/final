@@ -20,11 +20,36 @@ class Settings:
     # under 200ms. 8 is still squarely inside the documented range.
     feature_dimension: int = int(os.environ.get("FEATURE_DIMENSION", 8))
 
-    # Execution Manager (base architecture doc, Section 03): simulator today,
-    # structured so a noise-aware simulator or real QPU backend can be added
-    # later without changing the model layer above it.
+    # Execution Manager (base architecture doc, Section 03): "simulator"
+    # (default, local qiskit primitives) or "ibm_qpu" (IBM Quantum Platform
+    # via qiskit-ibm-runtime - see execution_manager.py for the real/fake
+    # backend split below). Structured so this was a change in one module,
+    # not in every model.
     backend_mode: str = os.environ.get("BACKEND_MODE", "simulator")
     shots: int = int(os.environ.get("SHOTS", 1024))
+
+    # --- IBM Quantum Platform (only read when backend_mode == "ibm_qpu") ---
+    # Real account credentials from https://quantum.cloud.ibm.com (Instance
+    # -> CRN, and an API key under your account). "channel" is the IBM
+    # Quantum Platform SDK's own term for which cloud auth surface to use;
+    # "ibm_cloud" is current, "ibm_quantum_platform" covers newer SDK
+    # versions' renamed default - qiskit-ibm-runtime accepts either name.
+    ibm_channel: str = os.environ.get("IBM_QUANTUM_CHANNEL", "ibm_cloud")
+    ibm_token: str | None = os.environ.get("IBM_QUANTUM_TOKEN")
+    ibm_instance: str | None = os.environ.get("IBM_QUANTUM_INSTANCE")
+    # Pin to a specific named backend (e.g. "ibm_torino"); leave unset to
+    # let QiskitRuntimeService.least_busy() pick automatically.
+    ibm_backend_name: str | None = os.environ.get("IBM_QUANTUM_BACKEND")
+    # Dev/test override: a qiskit_ibm_runtime.fake_provider class name (e.g.
+    # "FakeSherbrooke"), used INSTEAD of a real QiskitRuntimeService
+    # connection. Fake backends carry a real IBM device's exact coupling
+    # map/basis gates and run entirely locally (no network, no account) -
+    # this is how the ibm_qpu code path is verified in an environment with
+    # no route to IBM's cloud API, and it's a legitimate way to
+    # smoke-test/develop this integration without burning real QPU time.
+    # Never set this in a real deployment - it silently makes "ibm_qpu"
+    # mode not actually touch hardware.
+    ibm_fake_backend: str | None = os.environ.get("IBM_QUANTUM_FAKE_BACKEND")
 
     # Confidence & Thresholding (base architecture doc, Section 05, step 7).
     fraud_threshold: float = float(os.environ.get("FRAUD_THRESHOLD", 0.5))
