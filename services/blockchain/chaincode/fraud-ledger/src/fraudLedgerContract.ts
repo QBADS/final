@@ -33,8 +33,29 @@ export interface FraudDecisionRecord {
   chainRecordedAt: string;
 }
 
+/**
+ * Audit record for the IBM Quantum job-management feature
+ * (services/middleware's routes/quantumJobsApi.ts). A quantum job has no
+ * txId to attach to, so it is its own doc type/key rather than piggybacking
+ * on FraudDecisionRecord above, which requires an existing TransactionRecord.
+ * Deliberately no secrets (API key, access token, CRN) - only ids, backend
+ * name, program type, and terminal status, matching this ledger's existing
+ * "provenance without secrets" precedent (modelVersion/decisionHash above).
+ */
+export interface QuantumJobAuditRecord {
+  docType: "quantumJobAudit";
+  jobId: string; // middleware's own UUID, not the provider's raw job id
+  submittedByUsername: string;
+  backend: string;
+  programId: "sampler" | "estimator";
+  status: "completed" | "failed" | "cancelled";
+  recordedAt: string;
+  chainRecordedAt: string;
+}
+
 const txKey = (txId: string) => `TX_${txId}`;
 const decisionKey = (txId: string) => `DECISION_${txId}`;
+const quantumJobKey = (jobId: string) => `QJOB_${jobId}`;
 
 /**
  * Permission model (Section 5 of QBADS_Hyperledger_Fabric_Architecture.pdf):
@@ -210,6 +231,63 @@ export class FraudLedgerContract extends Contract {
 
     await ctx.stub.putState(decisionKey(txId), Buffer.from(JSON.stringify(record)));
     ctx.stub.setEvent("FraudDecisionRecorded", Buffer.from(JSON.stringify(record)));
+  }
+
+  /**
+   * Records the terminal-state audit trail for one IBM Quantum job. Scoped
+   * to the dedicated Middleware identity, same as RecordFraudDecision -
+   * matches the Section 5 permission model (Middleware submits, Auditor
+   * reads only). Write-once: rejects re-recording the same jobId.
+   */
+  @Transaction()
+  public async RecordQuantumJobAudit(
+    ctx: Context,
+    jobId: string,
+    submittedByUsername: string,
+    backend: string,
+    programId: string,
+    status: string,
+    recordedAt: string,
+  ): Promise<void> {
+    assertIsMiddleware(ctx);
+    if (!jobId || !submittedByUsername || !backend) {
+      throw new Error("jobId, submittedByUsername, and backend are required");
+    }
+    if (!["sampler", "estimator"].includes(programId)) {
+      throw new Error(`Invalid programId: ${programId}`);
+    }
+    if (!["completed", "failed", "cancelled"].includes(status)) {
+      throw new Error(`Invalid status for a quantum job audit record: ${status}`);
+    }
+
+    const existing = await ctx.stub.getState(quantumJobKey(jobId));
+    if (existing.length > 0) {
+      throw new Error(`Quantum job audit for ${jobId} already recorded`);
+    }
+
+    const record: QuantumJobAuditRecord = {
+      docType: "quantumJobAudit",
+      jobId,
+      submittedByUsername,
+      backend,
+      programId: programId as QuantumJobAuditRecord["programId"],
+      status: status as QuantumJobAuditRecord["status"],
+      recordedAt,
+      chainRecordedAt: chaincodeTxTimestampIso(ctx),
+    };
+
+    await ctx.stub.putState(quantumJobKey(jobId), Buffer.from(JSON.stringify(record)));
+    ctx.stub.setEvent("QuantumJobAuditRecorded", Buffer.from(JSON.stringify(record)));
+  }
+
+  @Transaction(false)
+  @Returns("string")
+  public async GetQuantumJobAudit(ctx: Context, jobId: string): Promise<string> {
+    const bytes = await ctx.stub.getState(quantumJobKey(jobId));
+    if (bytes.length === 0) {
+      throw new Error(`Quantum job audit ${jobId} not found`);
+    }
+    return bytes.toString();
   }
 
   @Transaction(false)

@@ -11,8 +11,24 @@ from fastapi import FastAPI, HTTPException
 from .calibration import CalibrationMap
 from .config import settings
 from .postprocessing import score_to_risk_level
+from .providers.base import QuantumProviderAuthError, QuantumProviderError, QuantumProviderRequestError, QuantumProviderTransientError
+from .providers.factory import job_provider
 from .registry import registry
-from .schemas import DeployRequest, FeedbackRequest, InferenceRequest, InferenceResponse, ModelInfo, RecalibrateRequest
+from .schemas import (
+    DeployRequest,
+    FeedbackRequest,
+    InferenceRequest,
+    InferenceResponse,
+    ModelInfo,
+    QuantumBackendResponse,
+    QuantumJobCancelResponse,
+    QuantumJobHandleResponse,
+    QuantumJobProviderHealthResponse,
+    QuantumJobResultResponse,
+    QuantumJobStatusResponse,
+    QuantumJobSubmitRequest,
+    RecalibrateRequest,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("quantum-engine")
@@ -157,3 +173,95 @@ def feedback(request: FeedbackRequest):
     # live.
     feedback_log.append(request)
     return {"stored": True, "totalFeedback": len(feedback_log)}
+
+
+# ---- IBM Quantum job-management (exec-admin dashboard feature) ----
+# Internal-only: called solely by services/middleware's quantumJobsApi.ts,
+# never exposed to the frontend. Backed by app/providers/ (QuantumProvider
+# abstraction) - see that package's base.py for why this is deliberately
+# independent of the /infer fraud-scoring path above.
+
+
+def _provider_error_to_http(err: QuantumProviderError) -> HTTPException:
+    if isinstance(err, QuantumProviderAuthError):
+        # Never echo IBM's raw error body - it may include account/CRN details.
+        return HTTPException(status_code=502, detail="quantum provider rejected the configured credentials")
+    if isinstance(err, QuantumProviderTransientError):
+        return HTTPException(status_code=503, detail="quantum provider temporarily unavailable")
+    if isinstance(err, QuantumProviderRequestError):
+        return HTTPException(status_code=422, detail=str(err))
+    return HTTPException(status_code=502, detail="quantum provider returned a malformed response")
+
+
+@app.post("/quantum-jobs", response_model=QuantumJobHandleResponse, status_code=201)
+async def submit_quantum_job(request: QuantumJobSubmitRequest):
+    try:
+        handle = await job_provider.submit_job(
+            program_id=request.programId,
+            backend=request.backend,
+            params=request.params,
+            tags=request.tags,
+            cost_seconds=request.costSeconds,
+        )
+    except QuantumProviderError as err:
+        raise _provider_error_to_http(err) from err
+    return QuantumJobHandleResponse(id=handle.id, backend=handle.backend, sessionId=handle.session_id)
+
+
+@app.get("/quantum-jobs/health", response_model=QuantumJobProviderHealthResponse)
+async def quantum_job_provider_health():
+    health = await job_provider.health_check()
+    return QuantumJobProviderHealthResponse(reachable=health.reachable, detail=health.detail, provider=settings.quantum_job_provider)
+
+
+@app.get("/quantum-jobs/{job_id}", response_model=QuantumJobStatusResponse)
+async def get_quantum_job_status(job_id: str):
+    try:
+        status = await job_provider.get_job_status(job_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except QuantumProviderError as err:
+        raise _provider_error_to_http(err) from err
+    return QuantumJobStatusResponse(
+        id=status.id,
+        status=status.status,
+        reason=status.reason,
+        queuePosition=status.queue_position,
+        estimatedRunningTimeSeconds=status.estimated_running_time_seconds,
+    )
+
+
+@app.get("/quantum-jobs/{job_id}/result", response_model=QuantumJobResultResponse)
+async def get_quantum_job_result(job_id: str):
+    try:
+        result = await job_provider.get_job_result(job_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except QuantumProviderError as err:
+        raise _provider_error_to_http(err) from err
+    return QuantumJobResultResponse(id=result.id, ready=result.ready, payload=result.payload)
+
+
+@app.post("/quantum-jobs/{job_id}/cancel", response_model=QuantumJobCancelResponse)
+async def cancel_quantum_job(job_id: str):
+    try:
+        cancelled = await job_provider.cancel_job(job_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except QuantumProviderError as err:
+        raise _provider_error_to_http(err) from err
+    return QuantumJobCancelResponse(cancelled=cancelled)
+
+
+@app.get("/quantum-backends", response_model=list[QuantumBackendResponse])
+async def list_quantum_backends():
+    try:
+        backends = await job_provider.list_backends()
+    except QuantumProviderError as err:
+        raise _provider_error_to_http(err) from err
+    return [
+        QuantumBackendResponse(
+            name=b.name, status=b.status, qubits=b.qubits, queueLength=b.queue_length, processorType=b.processor_type
+        )
+        for b in backends
+    ]

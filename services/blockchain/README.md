@@ -52,6 +52,13 @@ Implements the "Smart contract layer" row of Table 1 directly:
   key, via `getHistoryForKey` (Table 1: "audit trail").
 - `QueryTransactionsByInstitution` — CouchDB rich query (Table 1: "world
   state DB, queryable key-value data").
+- `RecordQuantumJobAudit` / `GetQuantumJobAudit` — audit trail for
+  Middleware's new IBM Quantum job-management feature
+  (`services/middleware`'s `/api/v1/quantum/*`). A job has no `txId`, so it
+  gets its own record type rather than piggybacking on `RecordFraudDecision`
+  — job id, submitter, backend, program type, and terminal status only,
+  **never the IBM API key/token/CRN**. Write-once, same
+  Middleware-identity-only gating as `RecordFraudDecision`.
 
 All chaincode timestamps use `ctx.stub.getTxTimestamp()`, not wall-clock
 time — chaincode execution must be deterministic across every endorsing
@@ -81,6 +88,7 @@ touches directly.
 | Transaction status / receipts | Response body: `{ fabricTransactionId, status }` |
 | Ledger query results | `GET /api/transactions/:txId`, `GET /api/transactions/:txId/decision`, `GET /api/institutions/:institutionId/transactions` |
 | Blockchain events / block notifications | `GET /api/events` (SSE stream of chaincode events) |
+| Quantum job audit trail | `POST /api/quantum-jobs/:jobId/audit`, `GET /api/quantum-jobs/:jobId/audit` |
 | Audit logs | `GET /api/transactions/:txId/audit-trail` |
 
 It connects to the network using `@hyperledger/fabric-gateway` (gRPC), signed

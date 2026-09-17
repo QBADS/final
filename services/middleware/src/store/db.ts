@@ -113,4 +113,27 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
   expiresAt INTEGER NOT NULL,
   revokedAt TEXT NOT NULL
 );
+
+-- IBM Quantum job management (exec-admin only, routes/quantumJobsApi.ts).
+-- idempotencyKey is UNIQUE so a concurrent duplicate POST /jobs with the
+-- same client-supplied key fails on insert rather than double-submitting to
+-- quantum-pipeline - see quantumJobsApi.ts's idempotency flow.
+CREATE TABLE IF NOT EXISTS quantum_jobs (
+  id TEXT PRIMARY KEY,
+  providerJobId TEXT,
+  submittedByUsername TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  programId TEXT NOT NULL,
+  tags TEXT NOT NULL,
+  status TEXT NOT NULL,
+  statusReason TEXT,
+  submittedAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  completedAt TEXT,
+  idempotencyKey TEXT NOT NULL UNIQUE,
+  resultPayload TEXT,
+  chainRecorded INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_quantum_jobs_status ON quantum_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_quantum_jobs_submittedBy ON quantum_jobs(submittedByUsername);
 `);

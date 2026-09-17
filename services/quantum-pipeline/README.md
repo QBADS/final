@@ -26,10 +26,15 @@ app/
   calibration.py                applies a fitted Platt/temperature/isotonic map - see "Recalibration" below
   registry.py                    trains + holds all three models + their calibration maps, tracks the champion
   schemas.py                   Pydantic request/response models
-  main.py                          FastAPI app: /infer, /feedback, /models, /models/deploy, /models/recalibrate, /health
+  main.py                          FastAPI app: /infer, /feedback, /models, /models/deploy, /models/recalibrate, /health, /quantum-jobs*, /quantum-backends
   models/
     base.py                       common QuantumFraudModel interface
     qsvm.py, qnn.py, vqc.py    the three swappable model families
+  providers/
+    base.py                       QuantumProvider interface - see "IBM Quantum job management" below
+    mock.py, simulator.py, ibm.py  the three swappable providers
+    factory.py                    picks one via QUANTUM_JOB_PROVIDER
+tests/                          pytest suite (mocked HTTP for the IBM provider, no live account needed)
 ```
 
 ## Running
@@ -83,6 +88,42 @@ built once for a fixed qubit count, not reconstructed per request.
 | Response signing | Placeholder - a SHA-256 hash, not a real cryptographic signature (no PKI/HSM infra) |
 | Continuous learning feedback (`/feedback`) | Stores ground truth only - per the doc, the engine "does not train live". `services/training-pipeline` exists now but generates its own synthetic labels rather than consuming this queue - see its README |
 | Execution Manager | Only `backend_mode=simulator` implemented; noise-aware simulator and real QPU are unimplemented seams |
+| IBM Quantum job management (`QUANTUM_JOB_PROVIDER`) | Real IBM Cloud REST client (`providers/ibm.py`) when set to `ibm` - IAM auth/token caching, `POST /v1/jobs`, status/result polling, backend discovery, retry/backoff. **Deliberately separate from the table above** - never wired into `/infer` or model training. Default `mock`; `simulator` runs real local Qiskit circuits with no IBM account. See below. |
+
+## IBM Quantum job management (new, separate from fraud-scoring)
+
+An exec-admin-only capability (exposed publicly via `services/middleware`'s
+`/api/v1/quantum/*`, which calls the internal routes below) to submit,
+monitor, and cancel jobs against a real IBM Quantum Compute Service account -
+independent of the QSVM/QNN/VQC models above. It is **not** wired into
+`/infer` or startup training: those already run 100+ circuit executions per
+model boot and one call per fraud decision, both incompatible with a real,
+queued, potentially billed IBM Cloud job. `QUANTUM_JOB_PROVIDER` controls
+only this feature; `BACKEND_MODE` is untouched and still simulator-only.
+
+Internal routes (called by Middleware, not exposed to the frontend):
+`POST /quantum-jobs`, `GET /quantum-jobs/{id}`, `GET /quantum-jobs/{id}/result`,
+`POST /quantum-jobs/{id}/cancel`, `GET /quantum-backends`, `GET /quantum-jobs/health`.
+
+```bash
+QUANTUM_JOB_PROVIDER=ibm IBM_QUANTUM_API_KEY=... IBM_QUANTUM_CRN=... \
+  ./.venv/Scripts/python -m uvicorn app.main:app --port 4002
+```
+
+Tests (mocked HTTP via `respx` - no IBM account, no network access needed):
+
+```bash
+./.venv/Scripts/python -m pip install -r requirements.txt
+./.venv/Scripts/python -m pytest -v
+```
+
+A separate, explicitly opt-in script makes one real call against a live IBM
+Cloud account - never run by `pytest`, never run automatically:
+
+```bash
+LIVE_IBM_TEST=1 IBM_QUANTUM_API_KEY=... IBM_QUANTUM_CRN=... \
+  ./.venv/Scripts/python scripts/live_ibm_smoke_test.py
+```
 
 ## Recalibration
 

@@ -113,6 +113,36 @@ app.get(
   }),
 );
 
+// Quantum job audit trail (services/middleware's routes/quantumJobsApi.ts).
+app.post(
+  "/api/quantum-jobs/:jobId/audit",
+  asyncHandler(async (req, res) => {
+    const { jobId } = req.params;
+    const { submittedByUsername, backend, programId, status, recordedAt } = req.body;
+    if (!submittedByUsername || !backend || !programId || !status) {
+      res.status(400).json({ error: "submittedByUsername, backend, programId, status are required" });
+      return;
+    }
+    const receipt = await submitAndGetReceipt(getContract(), "RecordQuantumJobAudit", [
+      jobId,
+      submittedByUsername,
+      backend,
+      programId,
+      status,
+      recordedAt ?? new Date().toISOString(),
+    ]);
+    res.status(201).json(receipt);
+  }),
+);
+
+app.get(
+  "/api/quantum-jobs/:jobId/audit",
+  asyncHandler(async (req, res) => {
+    const bytes = await getContract().evaluateTransaction("GetQuantumJobAudit", req.params.jobId);
+    res.json(JSON.parse(bytes.toString()));
+  }),
+);
+
 // Blockchain events / block notifications, streamed to Middleware as SSE.
 app.get("/api/events", (req: Request, res: Response) => {
   res.setHeader("Content-Type", "text/event-stream");

@@ -38,9 +38,15 @@ src/
   integrations/
     blockchainClient.ts             best-effort calls to services/blockchain/gateway
     platformHealthClient.ts     best-effort reads of the Quantum Engine's and Blockchain gateway's own /health
+    quantumJobsClient.ts           calls services/quantum-pipeline's internal /quantum-jobs* endpoints - see below
   metrics.ts                          real request-count/latency tracking for the Dashboard API's platform-health
+  middleware/
+    requestId.ts                     correlation-ID middleware, mounted globally
+    rateLimiter.ts                   minimal fixed-window limiter, used by the IBM Quantum job API
   routes/
     nodeApi.ts, dashboardApi.ts
+    quantumJobsApi.ts               IBM Quantum job management - see below
+  testUtils/fakeQuantumPipeline.ts  a tiny real HTTP server standing in for quantum-pipeline in tests
 ```
 
 ## Running
@@ -48,7 +54,11 @@ src/
 ```bash
 npm install
 npm run build && npm start   # :4000
+npm test                     # Vitest - see "IBM Quantum job management" below for what's covered
 ```
+
+Requires **Node 22+** (uses the built-in, experimental `node:sqlite` module -
+there is no separate database dependency).
 
 ```bash
 curl -X POST localhost:4000/api/node/transactions \
@@ -109,6 +119,70 @@ masked keys), `/config` (non-secret runtime thresholds),
 | `/security` auth-failure log | Real - `auth.ts` records every rejected Node API request (missing/invalid key), not a simulated feed |
 | `/feature-pipeline` field config + warnings | Real - it's `featureEngineering.ts`'s actual `FIELD_CONFIG` and genuine Stage 1 imputation/quarantine warnings from live submissions |
 | `/quantum-info`, `/blockchain-info` | Real passthrough of each service's own state - honestly reports unreachable/empty rather than fabricating a roster |
+| `/api/v1/quantum/*` (IBM Quantum job management) | Real end-to-end plumbing (auth, ownership, idempotency, rate limiting, persistence, blockchain audit trigger) - calls a real `QuantumProvider` on the quantum-pipeline side, defaulting to a deterministic mock provider so it works with no IBM account. See below. |
+
+## IBM Quantum job management
+
+A new, versioned, exec-admin-only API (`/api/v1/quantum/*` - the first
+versioned prefix in this repo) for submitting/monitoring/cancelling jobs
+against a real IBM Quantum account via `services/quantum-pipeline`'s
+`QuantumProvider` abstraction. **Deliberately separate from the existing
+quantum inference path above** - it never touches `/infer` or model
+training, so enabling real IBM hardware here cannot change fraud-scoring
+behavior or cost. See `services/quantum-pipeline/README.md` for the
+provider side (`mock`/`simulator`/`ibm`).
+
+```bash
+TOKEN=$(curl -s -X POST localhost:4000/api/dashboard/auth/login \
+  -H "content-type: application/json" \
+  -d '{"username":"exec-admin","password":"qbads-exec-admin-2026"}' | jq -r .token)
+
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/v1/quantum/backends
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/v1/quantum/health
+
+curl -X POST localhost:4000/api/v1/quantum/jobs \
+  -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -H "idempotency-key: $(uuidgen)" \
+  -d '{"programId":"sampler","backend":"mock_backend_a","params":{"shots":100}}'
+
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/v1/quantum/jobs/<id>
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/v1/quantum/jobs/<id>/result
+curl -X POST -H "authorization: Bearer $TOKEN" localhost:4000/api/v1/quantum/jobs/<id>/cancel
+```
+
+Key design points (see the implementation plan for full rationale):
+- **Ownership**: exec-admin role only (`auth/dashboardAuth.ts`'s
+  `requireExecAdmin`) - treated as platform infrastructure, not
+  per-institution data.
+- **Idempotency**: `POST /jobs` requires a client-supplied `Idempotency-Key`
+  header. A duplicate key replays the existing job without ever re-calling
+  quantum-pipeline; a submission that times out is marked `failed` (not
+  retried) and stays that way until a genuinely new key is used - this is
+  what "never blindly retry job submissions" means concretely here.
+- **Rate limiting / concurrency**: `QUANTUM_JOBS_RATE_LIMIT_PER_MINUTE`
+  (default 10) and `QUANTUM_JOBS_MAX_CONCURRENT_PER_USER` (default 5) are
+  placeholders pending real IBM Cloud plan quotas - tune them once you know
+  your account's limits.
+- **Persistence**: a new `quantum_jobs` SQLite table/`store` map, same
+  write-through-cache pattern as everything else in `store/inMemoryStore.ts`
+  - jobs survive a restart.
+- **Blockchain audit**: the first time a job reaches a terminal status, a
+  fire-and-forget `RecordQuantumJobAudit` chaincode call is made (job id,
+  backend, program type, status - never secrets) - see
+  `services/blockchain/README.md`. Respects the existing
+  `BLOCKCHAIN_WRITE_ENABLED` flag and is a safe no-op if the Fabric network
+  isn't deployed, exactly like every other blockchain write in this service.
+- **No IBM secret ever reaches this service** - `IBM_QUANTUM_API_KEY`/`IBM_QUANTUM_CRN`
+  live only in quantum-pipeline's own env; this service only ever talks to
+  quantum-pipeline's existing internal, unauthenticated-by-design network
+  boundary (same trust model as the `/infer` calls above).
+
+Tests (`npm test`, Vitest): auth/ownership, idempotency (including the
+concurrent-duplicate-key race), submission-failure-is-terminal, rate
+limiting, the concurrency guard, DB persistence/restart-recovery, and the
+full status-transition + result-caching + cancel flow - all against a real
+Express app and a real (fake) HTTP quantum-pipeline stand-in
+(`testUtils/fakeQuantumPipeline.ts`), no live IBM account involved.
 
 ## Persistence and Dashboard session auth
 

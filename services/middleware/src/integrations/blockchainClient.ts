@@ -1,4 +1,4 @@
-import type { FraudDecisionRecord, StoredTransaction } from "../domainTypes";
+import type { FraudDecisionRecord, QuantumJob, StoredTransaction } from "../domainTypes";
 import { config } from "../config";
 
 /**
@@ -54,5 +54,24 @@ export async function recordDecisionOnChain(decision: FraudDecisionRecord): Prom
     modelVersion: decision.modelVersion,
     decisionHash: decision.decisionHash,
     decidedAt: decision.decidedAt,
+  });
+}
+
+/**
+ * Quantum job audit trail (routes/quantumJobsApi.ts): a job has no txId, so
+ * it gets its own chaincode transaction (RecordQuantumJobAudit) rather than
+ * piggybacking on recordDecisionOnChain above, which requires an existing
+ * TransactionRecord. Called fire-and-forget the first time a job reaches a
+ * terminal status - never awaited in the response path, same best-effort
+ * contract as every other write in this file. No secrets (API key, CRN)
+ * ever appear in this payload - only ids, backend name, and status.
+ */
+export async function recordQuantumJobAuditOnChain(job: QuantumJob): Promise<boolean> {
+  return post(`/api/quantum-jobs/${job.id}/audit`, {
+    submittedByUsername: job.submittedByUsername,
+    backend: job.backend,
+    programId: job.programId,
+    status: job.status,
+    recordedAt: new Date().toISOString(),
   });
 }

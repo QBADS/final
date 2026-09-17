@@ -66,4 +66,15 @@ export const config = {
   // published transaction before giving up - covers Stage 1/2 + quantum
   // orchestration's own timeout/retries + decisioning + storage.
   streamingResponseTimeoutMs: Number(process.env.STREAMING_RESPONSE_TIMEOUT_MS ?? 15_000),
+
+  // IBM Quantum job-management feature (integrations/quantumJobsClient.ts,
+  // routes/quantumJobsApi.ts) - calls services/quantum-pipeline's internal
+  // /quantum-jobs* endpoints. Deliberately no IBM_* secret var here: the
+  // API key/CRN live only in quantum-pipeline's own env (app/config.py) -
+  // this service never sees or holds them, matching the same trust
+  // boundary as the existing quantumEngineUrl calls above.
+  quantumJobsTimeoutMs: Number(process.env.QUANTUM_JOBS_TIMEOUT_MS ?? 10_000),
+  quantumJobsMaxRetries: Number(process.env.QUANTUM_JOBS_MAX_RETRIES ?? 2),
+  quantumJobsRateLimitPerMinute: Number(process.env.QUANTUM_JOBS_RATE_LIMIT_PER_MINUTE ?? 10),
+  quantumJobsMaxConcurrentPerUser: Number(process.env.QUANTUM_JOBS_MAX_CONCURRENT_PER_USER ?? 5),
 };

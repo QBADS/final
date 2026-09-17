@@ -193,3 +193,17 @@ export function forbiddenForOtherInstitution(req: Request, institutionId: string
   const session = req.dashboardSession;
   return session?.role === "institution" && session.institutionId !== institutionId;
 }
+
+/**
+ * Gate for the IBM Quantum job-management API (routes/quantumJobsApi.ts):
+ * treated as platform infrastructure/ops, not per-institution data, so only
+ * exec-admin (Company Dash) may submit/view/cancel jobs - matching today's
+ * QuantumComputing.tsx page, which is already an internal exec view.
+ */
+export function requireExecAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (req.dashboardSession?.role !== "exec-admin") {
+    res.status(403).json({ error: "quantum job management requires the exec-admin role" });
+    return;
+  }
+  next();
+}

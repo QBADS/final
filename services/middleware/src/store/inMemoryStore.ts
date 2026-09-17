@@ -8,6 +8,7 @@ import type {
   Institution,
   LiveFeedEvent,
   PipelineWarningEvent,
+  QuantumJob,
   StoredTransaction,
 } from "../domainTypes";
 
@@ -43,6 +44,8 @@ class PersistentStore {
   readonly liveFeed: LiveFeedEvent[] = [];
   readonly authEvents: AuthEvent[] = [];
   readonly pipelineWarnings: PipelineWarningEvent[] = [];
+  readonly quantumJobs = new Map<string, QuantumJob>();
+  private readonly quantumJobIdempotencyIndex = new Map<string, string>(); // idempotencyKey -> id
   readonly events = new EventEmitter();
 
   constructor() {
@@ -53,6 +56,7 @@ class PersistentStore {
     this.loadLiveFeed();
     this.loadAuthEvents();
     this.loadPipelineWarnings();
+    this.loadQuantumJobs();
   }
 
   // ---- startup load (+ first-run seed) ----
@@ -135,6 +139,36 @@ class PersistentStore {
     this.pipelineWarnings.push(...rows.map((r) => ({ ...r, warnings: JSON.parse(r.warnings) as string[] })));
   }
 
+  private loadQuantumJobs() {
+    const rows = db.prepare(
+      "SELECT id, providerJobId, submittedByUsername, backend, programId, tags, status, statusReason, submittedAt, updatedAt, completedAt, idempotencyKey, resultPayload, chainRecorded FROM quantum_jobs",
+    ).all() as unknown as Array<{
+      id: string; providerJobId: string | null; submittedByUsername: string; backend: string; programId: string;
+      tags: string; status: string; statusReason: string | null; submittedAt: string; updatedAt: string;
+      completedAt: string | null; idempotencyKey: string; resultPayload: string | null; chainRecorded: number;
+    }>;
+    for (const r of rows) {
+      const job: QuantumJob = {
+        id: r.id,
+        providerJobId: r.providerJobId,
+        submittedByUsername: r.submittedByUsername,
+        backend: r.backend,
+        programId: r.programId as QuantumJob["programId"],
+        tags: JSON.parse(r.tags) as string[],
+        status: r.status as QuantumJob["status"],
+        statusReason: r.statusReason,
+        submittedAt: r.submittedAt,
+        updatedAt: r.updatedAt,
+        completedAt: r.completedAt,
+        idempotencyKey: r.idempotencyKey,
+        resultPayload: r.resultPayload ? (JSON.parse(r.resultPayload) as Record<string, unknown>) : null,
+        chainRecorded: Boolean(r.chainRecorded),
+      };
+      this.quantumJobs.set(job.id, job);
+      this.quantumJobIdempotencyIndex.set(job.idempotencyKey, job.id);
+    }
+  }
+
   // ---- reads (unchanged interface) ----
 
   institutionByApiKey(apiKey: string): Institution | undefined {
@@ -146,6 +180,15 @@ class PersistentStore {
     const startOfDay = new Date();
     startOfDay.setUTCHours(0, 0, 0, 0);
     return [...this.decisions.values()].filter((d) => new Date(d.decidedAt) >= startOfDay);
+  }
+
+  findQuantumJobByIdempotencyKey(key: string): QuantumJob | undefined {
+    const id = this.quantumJobIdempotencyIndex.get(key);
+    return id ? this.quantumJobs.get(id) : undefined;
+  }
+
+  quantumJobsBySubmitter(username: string): QuantumJob[] {
+    return [...this.quantumJobs.values()].filter((j) => j.submittedByUsername === username);
   }
 
   // ---- writes (same signatures as the old in-memory store; now also persist) ----
@@ -217,6 +260,44 @@ class PersistentStore {
       "INSERT INTO pipeline_warnings (id, txId, institutionId, warnings, occurredAt, rowOrder) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(full.id, full.txId, full.institutionId, JSON.stringify(full.warnings), full.occurredAt, Date.now());
     this.trimTable("pipeline_warnings", 200);
+  }
+
+  // addQuantumJob is called with status="submitted" *before* the outbound
+  // call to quantum-pipeline, so a crash mid-flight still leaves a durable
+  // idempotency-key record - see routes/quantumJobsApi.ts.
+  addQuantumJob(job: QuantumJob): void {
+    this.quantumJobs.set(job.id, job);
+    this.quantumJobIdempotencyIndex.set(job.idempotencyKey, job.id);
+    db.prepare(
+      "INSERT INTO quantum_jobs (id, providerJobId, submittedByUsername, backend, programId, tags, status, statusReason, submittedAt, updatedAt, completedAt, idempotencyKey, resultPayload, chainRecorded) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      job.id, job.providerJobId, job.submittedByUsername, job.backend, job.programId, JSON.stringify(job.tags),
+      job.status, job.statusReason, job.submittedAt, job.updatedAt, job.completedAt, job.idempotencyKey,
+      job.resultPayload ? JSON.stringify(job.resultPayload) : null, job.chainRecorded ? 1 : 0,
+    );
+  }
+
+  updateQuantumJob(
+    id: string,
+    patch: Partial<Pick<QuantumJob, "status" | "statusReason" | "providerJobId" | "completedAt" | "resultPayload">>,
+  ): QuantumJob | undefined {
+    const job = this.quantumJobs.get(id);
+    if (!job) return undefined;
+    Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+    db.prepare(
+      "UPDATE quantum_jobs SET providerJobId = ?, status = ?, statusReason = ?, updatedAt = ?, completedAt = ?, resultPayload = ? WHERE id = ?",
+    ).run(
+      job.providerJobId, job.status, job.statusReason, job.updatedAt, job.completedAt,
+      job.resultPayload ? JSON.stringify(job.resultPayload) : null, job.id,
+    );
+    return job;
+  }
+
+  setQuantumJobChainRecorded(id: string): void {
+    const job = this.quantumJobs.get(id);
+    if (!job) return;
+    job.chainRecorded = true;
+    db.prepare("UPDATE quantum_jobs SET chainRecorded = 1 WHERE id = ?").run(id);
   }
 
   // Keep these append-only log tables from growing unboundedly - only the

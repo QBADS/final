@@ -199,3 +199,39 @@ export interface PipelineWarningEvent {
   warnings: string[];
   occurredAt: string;
 }
+
+// ---- Quantum job management (exec-admin dashboard capability) ----
+// Hand-mirrored from packages/types/src/quantum.ts, byte-identical field
+// names, same deliberate-duplication precedent as RawTransactionInput above.
+// Deliberately separate from QuantumInferenceResult - this is the new,
+// ad-hoc IBM Quantum job-submission feature (routes/quantumJobsApi.ts), not
+// the existing per-transaction fraud-scoring path.
+export type QuantumJobStatus = "submitted" | "queued" | "running" | "completed" | "failed" | "cancelled";
+export type QuantumProgramId = "sampler" | "estimator";
+
+export interface QuantumJob {
+  id: string;
+  providerJobId: string | null;
+  submittedByUsername: string;
+  backend: string;
+  programId: QuantumProgramId;
+  tags: string[];
+  status: QuantumJobStatus;
+  statusReason: string | null;
+  submittedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  idempotencyKey: string;
+  resultPayload: Record<string, unknown> | null;
+  chainRecorded: boolean;
+}
+
+export type QuantumBackendStatus = "online" | "paused" | "offline";
+
+export interface QuantumBackend {
+  name: string;
+  status: QuantumBackendStatus;
+  qubits: number;
+  queueLength: number;
+  processorType: string | null;
+}

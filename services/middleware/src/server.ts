@@ -1,9 +1,12 @@
 import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { config } from "./config";
+import { requireDashboardSession, requireExecAdmin } from "./auth/dashboardAuth";
 import { nodeApiRouter } from "./routes/nodeApi";
 import { dashboardApiRouter } from "./routes/dashboardApi";
+import { quantumJobsRouter } from "./routes/quantumJobsApi";
 import { requestMetricsMiddleware } from "./metrics";
+import { requestIdMiddleware } from "./middleware/requestId";
 import { startTransactionConsumer } from "./streaming/transactionConsumer";
 
 /**
@@ -13,9 +16,10 @@ import { startTransactionConsumer } from "./streaming/transactionConsumer";
  * integrations/blockchainClient.ts and pipeline/quantumOrchestrationClient.ts)
  * so they have no inbound routes here - only Node API and Dashboard API do.
  */
-const app = express();
+export const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(requestIdMiddleware);
 app.use(requestMetricsMiddleware);
 
 app.get("/health", (_req, res) => {
@@ -24,11 +28,14 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/node", nodeApiRouter);
 app.use("/api/dashboard", dashboardApiRouter);
+// First versioned API prefix in this repo - deliberate, for the IBM
+// Quantum job-management feature only (see routes/quantumJobsApi.ts).
+app.use("/api/v1/quantum", requireDashboardSession, requireExecAdmin, quantumJobsRouter);
 
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  const status = err.name === "QuarantineError" ? 422 : 500;
-  res.status(status).json({ error: err.message });
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+  console.error(`[${req.requestId}]`, err);
+  const status = err.name === "QuarantineError" ? 422 : err.name === "QuantumProviderUnavailableError" ? 503 : 500;
+  res.status(status).json({ error: err.message, requestId: req.requestId });
 });
 
 async function main() {
@@ -46,7 +53,14 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error("[server] fatal startup error", err);
-  process.exit(1);
-});
+// Guarded so importing `app` for route tests never starts a real Kafka
+// consumer or opens a real port. Vitest sets process.env.VITEST for every
+// test run (documented behavior) - checking that, rather than
+// require.main === module, works whether the test file is transformed to
+// CJS or ESM, unlike the require.main idiom.
+if (!process.env.VITEST) {
+  main().catch((err) => {
+    console.error("[server] fatal startup error", err);
+    process.exit(1);
+  });
+}

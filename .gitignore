@@ -8,3 +8,11 @@ __pycache__/
 *.pyc
 services/training-pipeline/registry/
 services/middleware/data/
+
+# Real secrets (IBM Quantum API keys, JWT secrets, etc.) must never be
+# committed - only .env.example files (checked-in, values always blank)
+# document what each service expects.
+.env
+.env.*
+!.env.example
+!**/.env.example

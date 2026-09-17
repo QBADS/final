@@ -90,3 +90,59 @@ class RecalibrateRequest(BaseModel):
     calibrationVersion: str
     method: Literal["identity", "platt", "temperature", "isotonic"]
     params: dict
+
+
+# ---- IBM Quantum job-management (exec-admin dashboard feature) ----
+# Deliberately separate from InferenceRequest/InferenceResponse above - see
+# app/providers/base.py's module docstring for why this is an independent
+# capability from the per-transaction fraud-scoring path. These routes are
+# internal-only (called solely by services/middleware, one hop away), so
+# they stay flat/unversioned like every other route in this file.
+
+ProgramId = Literal["sampler", "estimator"]
+
+
+class QuantumJobSubmitRequest(BaseModel):
+    programId: ProgramId
+    backend: str
+    params: dict
+    tags: Optional[list[str]] = None
+    costSeconds: Optional[int] = Field(default=None, ge=0, le=10800)
+
+
+class QuantumJobHandleResponse(BaseModel):
+    id: str
+    backend: str
+    sessionId: Optional[str] = None
+
+
+class QuantumJobStatusResponse(BaseModel):
+    id: str
+    status: str
+    reason: Optional[str] = None
+    queuePosition: Optional[int] = None
+    estimatedRunningTimeSeconds: Optional[float] = None
+
+
+class QuantumJobResultResponse(BaseModel):
+    id: str
+    ready: bool
+    payload: Optional[dict] = None
+
+
+class QuantumJobCancelResponse(BaseModel):
+    cancelled: bool
+
+
+class QuantumBackendResponse(BaseModel):
+    name: str
+    status: str
+    qubits: int
+    queueLength: int
+    processorType: Optional[str] = None
+
+
+class QuantumJobProviderHealthResponse(BaseModel):
+    reachable: bool
+    detail: Optional[str] = None
+    provider: str

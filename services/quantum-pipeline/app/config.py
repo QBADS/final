@@ -38,5 +38,27 @@ class Settings:
 
     model_version: str = os.environ.get("MODEL_VERSION", "bootstrap-v0")
 
+    # --- Ad-hoc IBM Quantum job-management feature (exec-admin dashboard
+    # capability: submit/monitor/cancel a real IBM Quantum job, browse
+    # backends). Deliberately INDEPENDENT of backend_mode above, which keeps
+    # governing only the QSVM/QNN/VQC fraud models' simulator execution,
+    # unchanged. Wiring real IBM Quantum into that per-transaction path would
+    # mean every /infer call blocks on a real job queue (seconds-hours
+    # instead of <200ms) and every startup re-training submits 100+ billed
+    # jobs - out of scope; see the implementation plan for this feature.
+    quantum_job_provider: str = os.environ.get("QUANTUM_JOB_PROVIDER", "mock")  # "mock" | "simulator" | "ibm"
+
+    # Required only when quantum_job_provider="ibm". No default value on
+    # purpose (fail closed, not a fake sandbox secret) - see
+    # app/providers/factory.py.
+    ibm_quantum_api_key: str | None = os.environ.get("IBM_QUANTUM_API_KEY")
+    ibm_quantum_crn: str | None = os.environ.get("IBM_QUANTUM_CRN")
+    ibm_quantum_api_base_url: str = os.environ.get("IBM_QUANTUM_API_BASE_URL", "https://quantum.cloud.ibm.com/api")
+    ibm_quantum_api_version: str = os.environ.get("IBM_QUANTUM_API_VERSION", "2025-01-01")  # pinned, not "latest"
+    ibm_quantum_iam_url: str = os.environ.get("IBM_QUANTUM_IAM_URL", "https://iam.cloud.ibm.com/identity/token")
+    ibm_quantum_timeout_seconds: float = float(os.environ.get("IBM_QUANTUM_TIMEOUT_SECONDS", 30))
+    ibm_quantum_max_retries: int = int(os.environ.get("IBM_QUANTUM_MAX_RETRIES", 3))
+    ibm_quantum_token_refresh_margin_seconds: int = int(os.environ.get("IBM_QUANTUM_TOKEN_REFRESH_MARGIN_SECONDS", 300))
+
 
 settings = Settings()
