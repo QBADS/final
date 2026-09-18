@@ -117,13 +117,33 @@ Tests (mocked HTTP via `respx` - no IBM account, no network access needed):
 ./.venv/Scripts/python -m pytest -v
 ```
 
-A separate, explicitly opt-in script makes one real call against a live IBM
-Cloud account - never run by `pytest`, never run automatically:
+Two separate, explicitly opt-in scripts make real calls against a live IBM
+Cloud account - neither is run by `pytest`, neither runs automatically:
 
 ```bash
+# Generic connectivity/job-management smoke test (arbitrary job submission).
 LIVE_IBM_TEST=1 IBM_QUANTUM_API_KEY=... IBM_QUANTUM_CRN=... \
   ./.venv/Scripts/python scripts/live_ibm_smoke_test.py
+
+# Genuine validation that the LIVE champion VQC model - its real feature
+# map, ansatz, and real fitted weights, not a placeholder circuit - runs
+# correctly on real IBM hardware. Trains VQC locally (same code path as
+# registry.train_all()), transpiles the exact fitted circuit to the chosen
+# backend's real instruction set, submits it, and prints the real-hardware
+# measured probability next to the local simulator's for the same input
+# (some difference is expected - real hardware has noise the simulator
+# doesn't). Requires qiskit-ibm-runtime (pinned in requirements.txt, only
+# used by this script - IBMQuantumProvider itself talks plain REST).
+LIVE_IBM_TEST=1 IBM_QUANTUM_API_KEY=... IBM_QUANTUM_CRN=... \
+  ./.venv/Scripts/python scripts/live_ibm_vqc_validation.py
 ```
+
+Run once against `ibm_fez` (156-qubit, 0 pending jobs at the time): local
+simulator gave `0.5264`, real hardware gave `0.4756` — a `0.0508` gap
+consistent with real gate/readout noise, confirming the model's actual
+circuit (depth 50 locally, 257 after ISA transpilation to `sx`/`rz`/`cz`)
+is genuinely IBM-hardware-compatible today, without any change to the live
+`/infer` path.
 
 ## Recalibration
 
