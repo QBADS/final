@@ -64,6 +64,7 @@ jobs:
             --allow-unauthenticated \
             --memory 1Gi --timeout 60 \
             --startup-probe="tcpSocket.port=8080,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" \
+            --service-account="firebase-adminsdk-fbsvc@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-env-vars "QUANTUM_ENGINE_URL=${{ steps.quantum.outputs.url }},MIDDLEWARE_DB_PATH=:memory:,BLOCKCHAIN_WRITE_ENABLED=false,FIREBASE_SERVICE_ACCOUNT_PATH=/secrets/firebase-service-account.json" \
             --update-secrets="/secrets/firebase-service-account.json=qbads-firebase-key:latest" \
             --quiet
