@@ -5,6 +5,7 @@ import { requireDashboardSession, requireExecAdmin } from "./auth/dashboardAuth"
 import { nodeApiRouter } from "./routes/nodeApi";
 import { dashboardApiRouter } from "./routes/dashboardApi";
 import { quantumJobsRouter } from "./routes/quantumJobsApi";
+import { onboardingApiRouter } from "./routes/onboardingApi";
 import { requestMetricsMiddleware } from "./metrics";
 import { requestIdMiddleware } from "./middleware/requestId";
 import { startTransactionConsumer } from "./streaming/transactionConsumer";
@@ -28,6 +29,10 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/node", nodeApiRouter);
 app.use("/api/dashboard", dashboardApiRouter);
+// Deliberately unauthenticated - an institution can't have a key before
+// applying for one. Rate-limited internally (see onboardingApi.ts). Review
+// and approval happen through the exec-admin dashboard routes above.
+app.use("/api/institutions", onboardingApiRouter);
 // First versioned API prefix in this repo - deliberate, for the IBM
 // Quantum job-management feature only (see routes/quantumJobsApi.ts).
 app.use("/api/v1/quantum", requireDashboardSession, requireExecAdmin, quantumJobsRouter);

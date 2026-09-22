@@ -6,13 +6,14 @@ import { requestMetricsSnapshot } from "../metrics";
 import { config } from "../config";
 import { FIELD_CONFIG } from "../pipeline/featureEngineering";
 import { pcaStatus } from "../pipeline/pcaReducer";
-import { dashboardAuthRouter, requireDashboardSession, forbiddenForOtherInstitution, scopeInstitutionId } from "../auth/dashboardAuth";
+import { dashboardAuthRouter, requireDashboardSession, requireExecAdmin, forbiddenForOtherInstitution, scopeInstitutionId } from "../auth/dashboardAuth";
 import type { FraudDecisionRecord, Institution, StoredTransaction } from "../domainTypes";
 
 // Even with session auth in front of the Dashboard API, never leak the
-// Node API credential alongside institution metadata.
+// key hash alongside institution metadata (the preview is non-secret and
+// fine to keep - see onboarding/apiKeys.ts).
 function publicInstitution(inst: Institution) {
-  const { apiKey: _apiKey, ...rest } = inst;
+  const { apiKeyHash: _apiKeyHash, ...rest } = inst;
   return rest;
 }
 
@@ -96,6 +97,13 @@ dashboardApiRouter.get("/institutions", (_req, res) => {
   res.json([...store.institutions.values()].map(institutionSummary));
 });
 
+// Must be registered BEFORE /institutions/:id below - Express matches
+// route patterns in registration order, and :id would otherwise swallow
+// the literal path segment "pending" as if it were an institution id.
+dashboardApiRouter.get("/institutions/pending", requireExecAdmin, (_req, res) => {
+  res.json(store.pendingInstitutions().map(institutionSummary));
+});
+
 dashboardApiRouter.get("/institutions/:id", (req, res) => {
   if (forbiddenForOtherInstitution(req, req.params.id)) {
     res.status(403).json({ error: "not authorized for this institution" });
@@ -113,6 +121,61 @@ dashboardApiRouter.get("/institutions/:id", (req, res) => {
   const feedback = store.feedback.filter((f) => f.institutionId === institution.id);
 
   res.json({ institution: institutionSummary(institution), transactions, decisions, feedback });
+});
+
+// ---- Institution onboarding review (exec-admin only) ----
+// Applications arrive via the public routes/onboardingApi.ts's POST
+// /api/institutions/apply. Everything past that point - reviewing,
+// approving, rejecting, rotating/revoking keys - is exec-admin-gated: this
+// is platform infrastructure/access-control, not per-institution data, the
+// same reasoning routes/quantumJobsApi.ts uses for requireExecAdmin.
+// (GET /institutions/pending is registered earlier, above /institutions/:id.)
+
+dashboardApiRouter.post("/institutions/:id/approve", requireExecAdmin, (req, res) => {
+  const session = req.dashboardSession!;
+  const result = store.approveInstitution(req.params.id, session.username);
+  if (!result) {
+    res.status(409).json({ error: "application not found or not pending" });
+    return;
+  }
+  // The ONLY point in this system's lifetime the plaintext key exists
+  // outside the applicant's own records - never logged, never persisted,
+  // never retrievable again after this response.
+  res.json({ institution: institutionSummary(result.institution), apiKey: result.apiKey });
+});
+
+dashboardApiRouter.post("/institutions/:id/reject", requireExecAdmin, (req, res) => {
+  const session = req.dashboardSession!;
+  const { reason } = (req.body ?? {}) as { reason?: unknown };
+  if (typeof reason !== "string" || !reason.trim()) {
+    res.status(422).json({ error: "reason is required" });
+    return;
+  }
+  const institution = store.rejectInstitution(req.params.id, session.username, reason.trim());
+  if (!institution) {
+    res.status(409).json({ error: "application not found or not pending" });
+    return;
+  }
+  res.json({ institution: institutionSummary(institution) });
+});
+
+dashboardApiRouter.post("/institutions/:id/revoke", requireExecAdmin, (req, res) => {
+  const session = req.dashboardSession!;
+  const institution = store.revokeInstitution(req.params.id, session.username);
+  if (!institution) {
+    res.status(409).json({ error: "institution not found or not active" });
+    return;
+  }
+  res.json({ institution: institutionSummary(institution) });
+});
+
+dashboardApiRouter.post("/institutions/:id/rotate-key", requireExecAdmin, (req, res) => {
+  const result = store.rotateInstitutionKey(req.params.id);
+  if (!result) {
+    res.status(409).json({ error: "institution not found or not active" });
+    return;
+  }
+  res.json({ institution: institutionSummary(result.institution), apiKey: result.apiKey });
 });
 
 // Real hourly transaction counts for today (0-23) - not a smoothed/modeled
@@ -242,16 +305,11 @@ dashboardApiRouter.get("/blockchain-info", async (_req, res) => {
   });
 });
 
-// Every sandbox key shares the "qbads_sandbox_" prefix, so a plain
-// slice(0, N) shows the same string for every institution - mask the
-// middle instead so each one is still visually distinct.
-function maskKey(key: string): string {
-  return key.length <= 18 ? key : `${key.slice(0, 14)}…${key.slice(-4)}`;
-}
-
 // Recent authentication failures (never successes - see auth.ts, that
 // would be most of the request volume) plus each institution's key status
-// - for the "Security operations" page.
+// - for the "Security operations" page. apiKeyPreview was computed once at
+// issuance time (onboarding/apiKeys.ts) - there's no plaintext key left to
+// re-mask here, only its hash.
 dashboardApiRouter.get("/security", (_req, res) => {
   res.json({
     authEvents: store.authEvents,
@@ -259,7 +317,8 @@ dashboardApiRouter.get("/security", (_req, res) => {
       id: i.id,
       name: i.name,
       status: i.status,
-      apiKeyMasked: maskKey(i.apiKey),
+      onboardingStatus: i.onboardingStatus,
+      apiKeyMasked: i.apiKeyPreview ?? "not issued",
     })),
   });
 });

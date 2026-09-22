@@ -9,6 +9,7 @@ const PLACEHOLDER_INSTITUTION: Institution = {
   region: "—",
   fabricOrgId: "—",
   status: "offline",
+  onboardingStatus: "active",
   syncHealthPct: 0,
   connectedSince: new Date().toISOString(),
   lastEventAt: new Date().toISOString(),

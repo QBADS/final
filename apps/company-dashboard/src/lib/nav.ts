@@ -1,6 +1,6 @@
 import type { NavGroupConfig } from "@qbads/ui";
 
-export function companyNavGroups(fraudCaseCount: number, openCaseCount: number): NavGroupConfig[] {
+export function companyNavGroups(fraudCaseCount: number, openCaseCount: number, pendingOnboardingCount = 0): NavGroupConfig[] {
   return [
     {
       items: [
@@ -12,6 +12,11 @@ export function companyNavGroups(fraudCaseCount: number, openCaseCount: number):
     {
       label: "Institutions",
       items: [
+        {
+          label: "Onboarding",
+          to: "/institutions/onboarding",
+          ...(pendingOnboardingCount > 0 ? { badge: { label: String(pendingOnboardingCount), color: "amber" as const } } : {}),
+        },
         { label: "Connected banks", to: "/institutions/banks" },
         { label: "Fintechs & wallets", to: "/institutions/fintechs" },
         { label: "Payment processors", to: "/institutions/processors" },

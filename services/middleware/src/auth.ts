@@ -26,7 +26,12 @@ export function requireNodeAuth(req: Request, res: Response, next: NextFunction)
     return;
   }
   const institution = store.institutionByApiKey(apiKey);
-  if (!institution) {
+  // A revoked/rejected institution's key hash stays on record for audit
+  // (see store/inMemoryStore.ts's revokeInstitution) - it must still fail
+  // auth here. Reported identically to "key not found" so a revoked
+  // institution can't distinguish "revoked" from "never existed" by
+  // response alone.
+  if (!institution || institution.onboardingStatus !== "active") {
     store.pushAuthEvent({
       type: "invalid_key",
       keyPrefix: apiKey.slice(0, 16),

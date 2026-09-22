@@ -87,4 +87,9 @@ export const config = {
   // crashing startup.
   firebaseLiveFeedEnabled: (process.env.FIREBASE_LIVE_FEED_ENABLED ?? "true") === "true",
   firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH ?? "firebase-service-account.json",
+
+  // Institution onboarding (routes/onboardingApi.ts) - the one
+  // unauthenticated write endpoint in this service, so it's rate-limited
+  // per source IP against application spam.
+  onboardingApplyRateLimitPerHour: Number(process.env.ONBOARDING_APPLY_RATE_LIMIT_PER_HOUR ?? 5),
 };

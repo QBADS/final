@@ -29,16 +29,29 @@ db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
 
 db.exec(`
+-- apiKeyHash is UNIQUE (not apiKey - the plaintext is never stored, see
+-- onboarding/apiKeys.ts) so a hash collision can't silently alias two
+-- institutions. Nullable: no key exists until an application is approved.
 CREATE TABLE IF NOT EXISTS institutions (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  apiKey TEXT NOT NULL UNIQUE,
+  apiKeyHash TEXT UNIQUE,
+  apiKeyPreview TEXT,
   status TEXT NOT NULL,
+  onboardingStatus TEXT NOT NULL,
   connectedSince TEXT NOT NULL,
   kind TEXT NOT NULL,
   region TEXT NOT NULL,
-  fabricOrgId TEXT NOT NULL
+  fabricOrgId TEXT NOT NULL,
+  contactName TEXT NOT NULL,
+  contactEmail TEXT NOT NULL,
+  appliedAt TEXT NOT NULL,
+  approvedAt TEXT,
+  approvedBy TEXT,
+  rejectionReason TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_institutions_apiKeyHash ON institutions(apiKeyHash);
+CREATE INDEX IF NOT EXISTS idx_institutions_onboardingStatus ON institutions(onboardingStatus);
 
 CREATE TABLE IF NOT EXISTS transactions (
   txId TEXT PRIMARY KEY,

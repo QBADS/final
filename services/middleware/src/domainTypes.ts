@@ -162,15 +162,36 @@ export type InstitutionKind =
   | "payment_processor"
   | "regulator";
 
+// ---- Institution onboarding lifecycle ----
+// Deliberately separate from `status` (HealthStatus) below, which is live
+// connectivity health, not onboarding progress - see onboarding/apiKeys.ts
+// and routes/onboardingApi.ts for the apply -> pending -> approve/reject
+// flow this drives.
+export type OnboardingStatus = "pending" | "active" | "rejected" | "revoked";
+
 export interface Institution {
   id: string;
   name: string;
-  apiKey: string;
+  /** SHA-256 hex of the real key - the plaintext is never stored, only
+   * ever returned once at issuance (approve/rotate). Null until approved. */
+  apiKeyHash: string | null;
+  /** Non-secret truncated preview (e.g. "qbads_live_a1b2c3d4…f9a2"),
+   * computed once at issuance for display (Security operations page) -
+   * not enough entropy to reconstruct the real key. */
+  apiKeyPreview: string | null;
   status: "healthy" | "degraded" | "offline";
+  onboardingStatus: OnboardingStatus;
   connectedSince: string;
   kind: InstitutionKind;
   region: string;
   fabricOrgId: string;
+  contactName: string;
+  contactEmail: string;
+  appliedAt: string;
+  approvedAt?: string;
+  /** Dashboard username of the exec-admin who approved/rejected/revoked. */
+  approvedBy?: string;
+  rejectionReason?: string;
 }
 
 export interface LiveFeedEvent {

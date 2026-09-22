@@ -216,3 +216,38 @@ export interface ModelPerformanceSnapshot {
   readyForAggregation: boolean;
 }
 export const fetchModelPerformance = () => getJson<ModelPerformanceSnapshot>("/api/dashboard/model-performance");
+
+// ---- Institution onboarding (exec-admin) ----
+
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const token = await ensureToken();
+  const doFetch = (bearer: string) =>
+    fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  let res = await doFetch(token);
+  if (res.status === 401) {
+    inMemoryToken = null;
+    const fresh = await login();
+    res = await doFetch(fresh);
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({ error: `${path} -> ${res.status}` }));
+    throw new Error(errBody.error ?? `${path} -> ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
+
+export const fetchPendingInstitutions = () => getJson<Institution[]>("/api/dashboard/institutions/pending");
+
+export interface ApprovalResult {
+  institution: Institution;
+  apiKey: string; // shown exactly once - never retrievable again after this response
+}
+export const approveInstitution = (id: string) => postJson<ApprovalResult>(`/api/dashboard/institutions/${id}/approve`);
+export const rejectInstitution = (id: string, reason: string) =>
+  postJson<{ institution: Institution }>(`/api/dashboard/institutions/${id}/reject`, { reason });
+export const revokeInstitution = (id: string) => postJson<{ institution: Institution }>(`/api/dashboard/institutions/${id}/revoke`);
+export const rotateInstitutionKey = (id: string) => postJson<ApprovalResult>(`/api/dashboard/institutions/${id}/rotate-key`);

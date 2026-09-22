@@ -1,7 +1,7 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar, TickerBar, TopBar } from "@qbads/ui";
 import { companyNavGroups } from "./lib/nav";
-import { fetchFraudStats, fetchKpis, fetchTransactions } from "./lib/apiClient";
+import { fetchFraudStats, fetchKpis, fetchPendingInstitutions, fetchTransactions } from "./lib/apiClient";
 import { useFirestoreTicker, usePoll } from "./lib/useApi";
 import { EMPTY_FRAUD_STATS, EMPTY_KPIS } from "./lib/emptyState";
 
@@ -9,6 +9,7 @@ const routeTitles: Record<string, { title: string; path: string }> = {
   "/": { title: "Executive overview", path: "QBADS / Dashboard / Executive overview" },
   "/live-monitoring": { title: "Live monitoring", path: "QBADS / Dashboard / Live monitoring" },
   "/kpi-analytics": { title: "KPIs & analytics", path: "QBADS / Dashboard / KPIs & analytics" },
+  "/institutions/onboarding": { title: "Institution onboarding", path: "QBADS / Institutions / Onboarding" },
   "/institutions/banks": { title: "Connected banks", path: "QBADS / Institutions / Connected banks" },
   "/institutions/fintechs": { title: "Fintechs & wallets", path: "QBADS / Institutions / Fintechs & wallets" },
   "/institutions/processors": { title: "Payment processors", path: "QBADS / Institutions / Payment processors" },
@@ -32,6 +33,7 @@ export default function App() {
   const kpis = usePoll(fetchKpis, 4000, EMPTY_KPIS);
   const ticker = useFirestoreTicker(6);
   const reviewCases = usePoll(() => fetchTransactions({ decision: "REVIEW" }), 6000, []);
+  const pendingInstitutions = usePoll(fetchPendingInstitutions, 6000, []);
   const route = routeTitles[location.pathname] ?? { title: "QBADS", path: "QBADS / Dashboard" };
 
   return (
@@ -39,7 +41,7 @@ export default function App() {
       <Sidebar
         brandName="QBADS"
         brandSub="QUANTUM · BLOCKCHAIN · AI"
-        groups={companyNavGroups(fraudStats.detectedToday, reviewCases.length)}
+        groups={companyNavGroups(fraudStats.detectedToday, reviewCases.length, pendingInstitutions.length)}
         footer={
           <>
             v4.2.1 · role: <span style={{ color: "var(--txt2)" }}>exec-admin</span>

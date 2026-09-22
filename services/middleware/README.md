@@ -100,11 +100,49 @@ masked keys), `/config` (non-secret runtime thresholds),
 `/auth/login` and `/auth/logout`. All require a session bearer token except
 `/auth/login` - see "Persistence and Dashboard session auth" below.
 
+## Institution onboarding
+
+Adding a bank/fintech used to mean hand-editing a hardcoded array in
+`store/inMemoryStore.ts` and restarting the service - there was no signup
+flow, no real credential issuance (API keys were plaintext), no admin
+review step. That's replaced by a proper apply -> review -> approve flow,
+deliberately **not** instant self-service - the standard shape for
+onboarding a regulated financial institution, not a consumer signup form:
+
+```bash
+# 1. Institution applies (public, unauthenticated, rate-limited to
+#    ONBOARDING_APPLY_RATE_LIMIT_PER_HOUR per source IP)
+curl -X POST localhost:4000/api/institutions/apply -H "content-type: application/json" \
+  -d '{"name":"Acme Bank","kind":"bank","region":"US","contactName":"Jane Doe","contactEmail":"jane@acme.example"}'
+# -> { "applicationId": "inst-...", "status": "pending" }
+
+# 2. exec-admin reviews it (Company Dash: Institutions -> Onboarding page,
+#    or directly:)
+curl -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/institutions/pending
+
+# 3. Approve - a real key is generated and shown EXACTLY ONCE in this
+#    response. It is never stored in plaintext (only its SHA-256 hash) and
+#    is not retrievable again after this call returns.
+curl -X POST -H "authorization: Bearer $TOKEN" localhost:4000/api/dashboard/institutions/<id>/approve
+# -> { "institution": {...}, "apiKey": "qbads_live_..." }
+```
+
+Also available: `POST .../reject` (requires a `{"reason": "..."}` body),
+`POST .../rotate-key` (same one-time-reveal contract, invalidates the old
+key immediately), `POST .../revoke` (kills access immediately - the key
+hash stays on record for audit, but `auth.ts` checks `onboardingStatus`,
+not just hash match, so a revoked key stops authenticating right away).
+
+The 7 seeded sandbox institutions (`qbads_sandbox_*`) still work exactly as
+documented elsewhere in this README - only the storage mechanism changed
+(hashed, not plaintext), not the key values themselves.
+
 ## What's real vs. mocked
 
 | Piece | Status |
 |---|---|
 | Node API auth, ingest, query, feedback | Real |
+| Institution onboarding (apply/approve/reject/rotate/revoke) | Real - hashed key storage (SHA-256, plaintext shown exactly once at issuance), exec-admin-gated review, `auth.ts` checks live `onboardingStatus` on every request |
 | Stage 1 feature engineering (validate/classify/impute/normalize) | Real, per the doc's 1.2-1.5 |
 | Stage 2 vector standardization (encoding, assembly) | Real, per the doc's 2.2-2.3 |
 | Stage 2 dimensionality reduction (2.1) | Real PCA (`pipeline/pca.ts`: covariance matrix + Jacobi eigen-decomposition + top-K projection) once a rolling sample buffer has >=30 observations (`pipeline/pcaReducer.ts`); applied selectively to the non-core fields only (core risk fields - amount, crossBorderFlag, newDeviceFlag, mfaUsed, merchantCategory - are never PCA'd). Cold start (fewer than 30 samples) falls back to a documented chunked-average placeholder so the system still works from the first transaction. `GET /api/dashboard/pca-status` reports sample-buffer fill and whether real PCA is currently active. |

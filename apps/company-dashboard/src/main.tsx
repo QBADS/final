@@ -7,6 +7,7 @@ import { Overview } from "./pages/Overview";
 import { LiveMonitoring } from "./pages/LiveMonitoring";
 import { KpiAnalytics } from "./pages/KpiAnalytics";
 import { InstitutionsByKind } from "./pages/InstitutionsByKind";
+import { InstitutionOnboarding } from "./pages/InstitutionOnboarding";
 import { TransactionCentre } from "./pages/TransactionCentre";
 import { FraudDetectionPage } from "./pages/FraudDetectionPage";
 import { CaseManagement } from "./pages/CaseManagement";
@@ -27,6 +28,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/" element={<Overview />} />
           <Route path="live-monitoring" element={<LiveMonitoring />} />
           <Route path="kpi-analytics" element={<KpiAnalytics />} />
+          <Route path="institutions/onboarding" element={<InstitutionOnboarding />} />
           <Route path="institutions/banks" element={<InstitutionsByKind kinds={["bank"]} label="Connected banks" />} />
           <Route path="institutions/fintechs" element={<InstitutionsByKind kinds={["fintech", "digital_wallet", "mobile_money"]} label="Fintechs & wallets" />} />
           <Route path="institutions/processors" element={<InstitutionsByKind kinds={["payment_processor"]} label="Payment processors" />} />

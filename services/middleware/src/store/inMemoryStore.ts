@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
+import { generateApiKey, hashApiKey, previewApiKey } from "../onboarding/apiKeys";
 import type {
   AuthEvent,
   FeedbackItem,
   FraudDecisionRecord,
   Institution,
+  InstitutionKind,
   LiveFeedEvent,
   PipelineWarningEvent,
   QuantumJob,
@@ -63,17 +65,24 @@ class PersistentStore {
 
   private loadInstitutions() {
     const rows = db.prepare("SELECT * FROM institutions").all() as unknown as Array<{
-      id: string; name: string; apiKey: string; status: Institution["status"];
-      connectedSince: string; kind: Institution["kind"]; region: string; fabricOrgId: string;
+      id: string; name: string; apiKeyHash: string | null; apiKeyPreview: string | null; status: Institution["status"];
+      onboardingStatus: Institution["onboardingStatus"]; connectedSince: string; kind: Institution["kind"]; region: string;
+      fabricOrgId: string; contactName: string; contactEmail: string; appliedAt: string;
+      approvedAt: string | null; approvedBy: string | null; rejectionReason: string | null;
     }>;
     if (rows.length === 0) {
       this.seedInstitutions();
       return;
     }
     for (const r of rows) {
-      const inst: Institution = { id: r.id, name: r.name, apiKey: r.apiKey, status: r.status, connectedSince: r.connectedSince, kind: r.kind, region: r.region, fabricOrgId: r.fabricOrgId };
+      const inst: Institution = {
+        id: r.id, name: r.name, apiKeyHash: r.apiKeyHash, apiKeyPreview: r.apiKeyPreview, status: r.status,
+        onboardingStatus: r.onboardingStatus, connectedSince: r.connectedSince, kind: r.kind, region: r.region,
+        fabricOrgId: r.fabricOrgId, contactName: r.contactName, contactEmail: r.contactEmail, appliedAt: r.appliedAt,
+        approvedAt: r.approvedAt ?? undefined, approvedBy: r.approvedBy ?? undefined, rejectionReason: r.rejectionReason ?? undefined,
+      };
       this.institutions.set(inst.id, inst);
-      this.apiKeyIndex.set(inst.apiKey, inst.id);
+      if (inst.apiKeyHash) this.apiKeyIndex.set(inst.apiKeyHash, inst.id);
     }
   }
 
@@ -81,9 +90,12 @@ class PersistentStore {
   // "Sandbox API keys (seeded in store/inMemoryStore.ts, one per
   // institution)") - only runs the first time the DB file is created, so
   // both dashboards' fixed-institution assumptions (inst-2 / Nova Fintech)
-  // keep working unchanged.
+  // keep working unchanged. These plaintext keys are already public (this
+  // repo's own README/docs document them) so keeping them as the seed
+  // values is fine - only the storage mechanism changed to hashed, not the
+  // values themselves, so every existing curl example/test still works.
   private seedInstitutions() {
-    const seed: Array<Omit<Institution, "connectedSince">> = [
+    const seed: Array<{ id: string; name: string; apiKey: string; status: Institution["status"]; kind: InstitutionKind; region: string; fabricOrgId: string }> = [
       { id: "inst-1", name: "First Meridian Bank", apiKey: "qbads_sandbox_banka", status: "healthy", kind: "bank", region: "US", fabricOrgId: "org-a" },
       { id: "inst-2", name: "Nova Fintech", apiKey: "qbads_sandbox_novafintech", status: "healthy", kind: "fintech", region: "SG", fabricOrgId: "org-c" },
       { id: "inst-3", name: "VaultPay Wallet", apiKey: "qbads_sandbox_vaultpay", status: "degraded", kind: "digital_wallet", region: "EU", fabricOrgId: "org-c" },
@@ -93,13 +105,22 @@ class PersistentStore {
       { id: "inst-7", name: "Helios Gateway", apiKey: "qbads_sandbox_helios", status: "healthy", kind: "payment_processor", region: "US", fabricOrgId: "org-b" },
     ];
     const insert = db.prepare(
-      "INSERT INTO institutions (id, name, apiKey, status, connectedSince, kind, region, fabricOrgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO institutions (id, name, apiKeyHash, apiKeyPreview, status, onboardingStatus, connectedSince, kind, region, fabricOrgId, contactName, contactEmail, appliedAt, approvedAt, approvedBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
-    for (const inst of seed) {
-      const full: Institution = { ...inst, connectedSince: new Date().toISOString() };
-      insert.run(full.id, full.name, full.apiKey, full.status, full.connectedSince, full.kind, full.region, full.fabricOrgId);
+    for (const s of seed) {
+      const now = new Date().toISOString();
+      const full: Institution = {
+        id: s.id, name: s.name, apiKeyHash: hashApiKey(s.apiKey), apiKeyPreview: previewApiKey(s.apiKey),
+        status: s.status, onboardingStatus: "active", connectedSince: now, kind: s.kind, region: s.region,
+        fabricOrgId: s.fabricOrgId, contactName: `${s.name} Integrations`, contactEmail: `integrations@${s.id}.example`,
+        appliedAt: now, approvedAt: now, approvedBy: "system-seed",
+      };
+      insert.run(
+        full.id, full.name, full.apiKeyHash, full.apiKeyPreview, full.status, full.onboardingStatus, full.connectedSince,
+        full.kind, full.region, full.fabricOrgId, full.contactName, full.contactEmail, full.appliedAt, full.approvedAt, full.approvedBy,
+      );
       this.institutions.set(full.id, full);
-      this.apiKeyIndex.set(full.apiKey, full.id);
+      this.apiKeyIndex.set(full.apiKeyHash!, full.id);
     }
   }
 
@@ -171,9 +192,16 @@ class PersistentStore {
 
   // ---- reads (unchanged interface) ----
 
+  /** `apiKey` here is the plaintext presented in the x-api-key header -
+   * hashed before lookup since only hashes are ever stored/indexed. Signature
+   * unchanged from before onboarding existed, so auth.ts needed no changes. */
   institutionByApiKey(apiKey: string): Institution | undefined {
-    const id = this.apiKeyIndex.get(apiKey);
+    const id = this.apiKeyIndex.get(hashApiKey(apiKey));
     return id ? this.institutions.get(id) : undefined;
+  }
+
+  pendingInstitutions(): Institution[] {
+    return [...this.institutions.values()].filter((i) => i.onboardingStatus === "pending");
   }
 
   decisionsToday(): FraudDecisionRecord[] {
@@ -230,6 +258,106 @@ class PersistentStore {
       "INSERT INTO feedback (id, txId, institutionId, institutionVerdict, note, submittedAt) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(full.id, full.txId, full.institutionId, full.institutionVerdict, full.note ?? null, full.submittedAt);
     return full;
+  }
+
+  // ---- institution onboarding lifecycle ----
+  // See routes/onboardingApi.ts (public apply) and dashboardApi.ts's
+  // exec-admin-only approve/reject/rotate/revoke routes.
+
+  applyForOnboarding(input: {
+    name: string;
+    kind: InstitutionKind;
+    region: string;
+    fabricOrgId: string;
+    contactName: string;
+    contactEmail: string;
+  }): Institution {
+    const now = new Date().toISOString();
+    const inst: Institution = {
+      id: `inst-${randomUUID().slice(0, 8)}`,
+      name: input.name,
+      apiKeyHash: null,
+      apiKeyPreview: null,
+      status: "offline", // no traffic yet - matches reality, not aspirational
+      onboardingStatus: "pending",
+      connectedSince: now,
+      kind: input.kind,
+      region: input.region,
+      fabricOrgId: input.fabricOrgId,
+      contactName: input.contactName,
+      contactEmail: input.contactEmail,
+      appliedAt: now,
+    };
+    this.institutions.set(inst.id, inst);
+    db.prepare(
+      "INSERT INTO institutions (id, name, apiKeyHash, apiKeyPreview, status, onboardingStatus, connectedSince, kind, region, fabricOrgId, contactName, contactEmail, appliedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(inst.id, inst.name, null, null, inst.status, inst.onboardingStatus, inst.connectedSince, inst.kind, inst.region, inst.fabricOrgId, inst.contactName, inst.contactEmail, inst.appliedAt);
+    return inst;
+  }
+
+  /** Returns the plaintext key ONCE - it is never stored or retrievable again,
+   * only its hash. Returns undefined if the application isn't in a state
+   * that can be approved (not found, or not pending). */
+  approveInstitution(id: string, approvedByUsername: string): { institution: Institution; apiKey: string } | undefined {
+    const inst = this.institutions.get(id);
+    if (!inst || inst.onboardingStatus !== "pending") return undefined;
+
+    const apiKey = generateApiKey();
+    const now = new Date().toISOString();
+    inst.apiKeyHash = hashApiKey(apiKey);
+    inst.apiKeyPreview = previewApiKey(apiKey);
+    inst.onboardingStatus = "active";
+    inst.status = "healthy";
+    inst.connectedSince = now;
+    inst.approvedAt = now;
+    inst.approvedBy = approvedByUsername;
+
+    this.apiKeyIndex.set(inst.apiKeyHash, inst.id);
+    db.prepare(
+      "UPDATE institutions SET apiKeyHash = ?, apiKeyPreview = ?, onboardingStatus = ?, status = ?, connectedSince = ?, approvedAt = ?, approvedBy = ? WHERE id = ?",
+    ).run(inst.apiKeyHash, inst.apiKeyPreview, inst.onboardingStatus, inst.status, inst.connectedSince, inst.approvedAt, inst.approvedBy, inst.id);
+    return { institution: inst, apiKey };
+  }
+
+  rejectInstitution(id: string, rejectedByUsername: string, reason: string): Institution | undefined {
+    const inst = this.institutions.get(id);
+    if (!inst || inst.onboardingStatus !== "pending") return undefined;
+    inst.onboardingStatus = "rejected";
+    inst.approvedBy = rejectedByUsername;
+    inst.rejectionReason = reason;
+    db.prepare("UPDATE institutions SET onboardingStatus = ?, approvedBy = ?, rejectionReason = ? WHERE id = ?").run(
+      inst.onboardingStatus, inst.approvedBy, inst.rejectionReason, inst.id,
+    );
+    return inst;
+  }
+
+  /** Revokes an active institution's access - its key hash stays on record
+   * (for audit) but auth.ts's onboardingStatus check rejects it immediately. */
+  revokeInstitution(id: string, revokedByUsername: string): Institution | undefined {
+    const inst = this.institutions.get(id);
+    if (!inst || inst.onboardingStatus !== "active") return undefined;
+    inst.onboardingStatus = "revoked";
+    inst.status = "offline";
+    inst.approvedBy = revokedByUsername;
+    db.prepare("UPDATE institutions SET onboardingStatus = ?, status = ?, approvedBy = ? WHERE id = ?").run(
+      inst.onboardingStatus, inst.status, inst.approvedBy, inst.id,
+    );
+    return inst;
+  }
+
+  /** Same one-time-reveal contract as approveInstitution - the old key's
+   * hash is simply overwritten, invalidating it immediately. */
+  rotateInstitutionKey(id: string): { institution: Institution; apiKey: string } | undefined {
+    const inst = this.institutions.get(id);
+    if (!inst || inst.onboardingStatus !== "active" || !inst.apiKeyHash) return undefined;
+
+    this.apiKeyIndex.delete(inst.apiKeyHash);
+    const apiKey = generateApiKey();
+    inst.apiKeyHash = hashApiKey(apiKey);
+    inst.apiKeyPreview = previewApiKey(apiKey);
+    this.apiKeyIndex.set(inst.apiKeyHash, inst.id);
+    db.prepare("UPDATE institutions SET apiKeyHash = ?, apiKeyPreview = ? WHERE id = ?").run(inst.apiKeyHash, inst.apiKeyPreview, inst.id);
+    return { institution: inst, apiKey };
   }
 
   pushLiveFeedEvent(event: LiveFeedEvent) {

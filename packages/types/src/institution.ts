@@ -14,6 +14,10 @@ export type InstitutionKind =
 
 export type HealthStatus = "healthy" | "degraded" | "offline";
 
+/** Onboarding lifecycle - deliberately separate from HealthStatus above,
+ * which is live connectivity health, not application/approval progress. */
+export type OnboardingStatus = "pending" | "active" | "rejected" | "revoked";
+
 export interface Institution {
   id: string;
   name: string;
@@ -22,11 +26,18 @@ export interface Institution {
   /** Fabric organization this institution maps to (see Hyperledger Fabric doc, Section 2). */
   fabricOrgId: string;
   status: HealthStatus;
+  onboardingStatus: OnboardingStatus;
   /** Rolling uptime / sync health percentage, 0-100. */
   syncHealthPct: number;
   connectedSince: string;
   lastEventAt: string;
   transactionCount?: number;
+  contactName?: string;
+  contactEmail?: string;
+  appliedAt?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectionReason?: string;
 }
 
 export interface NodeConnectionStatus {
