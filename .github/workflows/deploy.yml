@@ -38,6 +38,7 @@ jobs:
             --region "$REGION" \
             --allow-unauthenticated \
             --memory 2Gi --cpu 2 --timeout 300 \
+            --startup-probe="tcpSocket.port=8080,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=10,failureThreshold=30" \
             --set-env-vars QUANTUM_JOB_PROVIDER=mock \
             --quiet
           URL=$(gcloud run services describe quantum-pipeline --project "$PROJECT_ID" --region "$REGION" --format 'value(status.url)')
@@ -62,6 +63,7 @@ jobs:
             --region "$REGION" \
             --allow-unauthenticated \
             --memory 1Gi --timeout 60 \
+            --startup-probe="tcpSocket.port=8080,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" \
             --set-env-vars "QUANTUM_ENGINE_URL=${{ steps.quantum.outputs.url }},MIDDLEWARE_DB_PATH=:memory:,BLOCKCHAIN_WRITE_ENABLED=false,FIREBASE_SERVICE_ACCOUNT_PATH=/secrets/firebase-service-account.json" \
             --update-secrets="/secrets/firebase-service-account.json=qbads-firebase-key:latest" \
             --quiet
