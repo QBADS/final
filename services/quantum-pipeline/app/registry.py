@@ -33,7 +33,22 @@ DEFAULT_CHAMPION = "VQC"
 # feature_dimension/QUBIT_BUDGET coupling note in config.py for the same
 # kind of cross-service assumption. A real multi-host deployment would
 # fetch the artifact from object storage instead of a shared filesystem path.
-TRAINING_PIPELINE_REGISTRY_DIR = Path(__file__).resolve().parents[3] / "services" / "training-pipeline" / "registry"
+#
+# That assumption doesn't hold in a standalone container image (e.g. Cloud
+# Run), which only has app/ copied in - parents[3] doesn't exist there, and
+# indexing it used to crash the whole service at import time before uvicorn
+# ever bound its port. Fall back to a directory that simply has no
+# artifacts in that case: registry.deploy() below already raises a clear
+# FileNotFoundError for a missing artifact rather than crashing, so this is
+# a safe degrade (no training-pipeline promotion available, same as today
+# until that service is deployed alongside this one), not a silent
+# behavior change for the monorepo/local-dev case.
+_file_parents = Path(__file__).resolve().parents
+TRAINING_PIPELINE_REGISTRY_DIR = (
+    _file_parents[3] / "services" / "training-pipeline" / "registry"
+    if len(_file_parents) > 3
+    else Path(__file__).resolve().parent / "_no_training_pipeline_registry"
+)
 
 
 class ModelRegistry:
