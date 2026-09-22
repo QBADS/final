@@ -1,0 +1,103 @@
+name: Deploy QBADS (backend + dashboards)
+
+# Full pipeline: deploys quantum-pipeline and middleware to Cloud Run
+# (wiring middleware's QUANTUM_ENGINE_URL to quantum-pipeline's real URL),
+# then builds both dashboards pointed at middleware's real Cloud Run URL
+# and deploys them to Firebase Hosting. Requires the FIREBASE_SERVICE_ACCOUNT
+# repo secret (already set) - the same service account is used for GCP auth
+# (Cloud Run/Artifact Registry/Cloud Build/Secret Manager) and Firebase
+# Hosting deploy.
+on:
+  push:
+    branches: [QBADS_new]
+
+env:
+  PROJECT_ID: qbads-fd1bf
+  REGION: us-central1
+
+jobs:
+  deploy_backend:
+    runs-on: ubuntu-latest
+    outputs:
+      middleware_url: ${{ steps.middleware.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy quantum-pipeline to Cloud Run
+        id: quantum
+        run: |
+          gcloud run deploy quantum-pipeline \
+            --source services/quantum-pipeline \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --memory 2Gi --cpu 2 --timeout 300 \
+            --set-env-vars QUANTUM_JOB_PROVIDER=mock \
+            --quiet
+          URL=$(gcloud run services describe quantum-pipeline --project "$PROJECT_ID" --region "$REGION" --format 'value(status.url)')
+          echo "quantum-pipeline deployed at $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Store Firebase service account in Secret Manager
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-key.json"
+          if gcloud secrets describe qbads-firebase-key --project "$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud secrets versions add qbads-firebase-key --project "$PROJECT_ID" --data-file="$RUNNER_TEMP/firebase-key.json"
+          else
+            gcloud secrets create qbads-firebase-key --project "$PROJECT_ID" --data-file="$RUNNER_TEMP/firebase-key.json"
+          fi
+
+      - name: Deploy middleware to Cloud Run
+        id: middleware
+        run: |
+          gcloud run deploy middleware \
+            --source services/middleware \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --memory 1Gi --timeout 60 \
+            --set-env-vars "QUANTUM_ENGINE_URL=${{ steps.quantum.outputs.url }},MIDDLEWARE_DB_PATH=:memory:,BLOCKCHAIN_WRITE_ENABLED=false,FIREBASE_SERVICE_ACCOUNT_PATH=/secrets/firebase-service-account.json" \
+            --update-secrets="/secrets/firebase-service-account.json=qbads-firebase-key:latest" \
+            --quiet
+          URL=$(gcloud run services describe middleware --project "$PROJECT_ID" --region "$REGION" --format 'value(status.url)')
+          echo "middleware deployed at $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  deploy_dashboards:
+    needs: deploy_backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install workspace dependencies
+        run: npm install
+
+      - name: Build company-dashboard (admin)
+        working-directory: apps/company-dashboard
+        env:
+          VITE_MIDDLEWARE_URL: ${{ needs.deploy_backend.outputs.middleware_url }}
+        run: npm run build
+
+      - name: Build node-dashboard (client)
+        working-directory: apps/node-dashboard
+        env:
+          VITE_MIDDLEWARE_URL: ${{ needs.deploy_backend.outputs.middleware_url }}
+        run: npm run build
+
+      - name: Write Firebase service account key
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-service-account.json"
+
+      - name: Deploy to Firebase Hosting
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+        run: npx --yes firebase-tools@latest deploy --only hosting --project qbads-fd1bf

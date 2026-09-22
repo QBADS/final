@@ -1,0 +1,8 @@
+node_modules
+dist
+data
+.env
+.env.*
+firebase-service-account.json
+firestore.rules
+*.test.ts
