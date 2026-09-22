@@ -1,0 +1,47 @@
+name: Deploy dashboards to Firebase Hosting
+
+# Auto-deploys both apps/company-dashboard and apps/node-dashboard to their
+# respective Firebase Hosting sites (see firebase.json) on every push to
+# QBADS_new. Requires a repo secret named FIREBASE_SERVICE_ACCOUNT holding
+# the Firebase Admin SDK service account JSON - see the comment at the
+# bottom of this file for how to add it.
+on:
+  push:
+    branches: [QBADS_new]
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install workspace dependencies
+        run: npm install
+
+      - name: Build company-dashboard (admin)
+        working-directory: apps/company-dashboard
+        run: npm run build
+
+      - name: Build node-dashboard (client)
+        working-directory: apps/node-dashboard
+        run: npm run build
+
+      - name: Write Firebase service account key
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-service-account.json"
+
+      - name: Deploy to Firebase Hosting
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+        run: npx --yes firebase-tools@latest deploy --only hosting --project qbads-fd1bf
+
+# --- One-time manual setup required (GitHub doesn't allow setting repo
+# secrets from a workflow file itself, for obvious security reasons): ---
+#   1. github.com/QBADS/final -> Settings -> Secrets and variables -> Actions
+#   2. "New repository secret", name: FIREBASE_SERVICE_ACCOUNT
+#   3. Value: the full contents of services/middleware/firebase-service-account.json
+#      (paste directly into GitHub's UI - never commit this file itself).
+#   4. Requires admin access on the repo, not just write access.

@@ -1,0 +1,17 @@
+{
+  "firestore": {
+    "rules": "services/middleware/firestore.rules"
+  },
+  "hosting": [
+    {
+      "site": "qbads-fd1bf",
+      "public": "apps/company-dashboard/dist",
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    },
+    {
+      "site": "qbads-node-dashboard",
+      "public": "apps/node-dashboard/dist",
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    }
+  ]
+}
