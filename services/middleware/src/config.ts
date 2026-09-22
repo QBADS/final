@@ -77,4 +77,14 @@ export const config = {
   quantumJobsMaxRetries: Number(process.env.QUANTUM_JOBS_MAX_RETRIES ?? 2),
   quantumJobsRateLimitPerMinute: Number(process.env.QUANTUM_JOBS_RATE_LIMIT_PER_MINUTE ?? 10),
   quantumJobsMaxConcurrentPerUser: Number(process.env.QUANTUM_JOBS_MAX_CONCURRENT_PER_USER ?? 5),
+
+  // Real-time dashboard feed (integrations/firebaseClient.ts): live feed
+  // and ticker events are published to Firestore, in addition to (not
+  // instead of) the existing SQLite/SSE path, so both dashboards can
+  // subscribe directly for push updates. Best-effort, same
+  // "deterministic under failure" principle as blockchainWriteEnabled -
+  // self-disables if the service account file is missing rather than
+  // crashing startup.
+  firebaseLiveFeedEnabled: (process.env.FIREBASE_LIVE_FEED_ENABLED ?? "true") === "true",
+  firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH ?? "firebase-service-account.json",
 };

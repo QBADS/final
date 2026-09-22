@@ -1,0 +1,21 @@
+// Firestore security rules for QBADS's real-time dashboard feed.
+// Not deployed automatically - paste this into Firebase Console -> Firestore
+// Database -> Rules -> Publish (or `firebase deploy --only firestore:rules`
+// if you have the Firebase CLI set up).
+//
+// live_feed documents contain transaction ids, institution names, and risk
+// scores - no PII, no secrets - so public read is acceptable for this
+// dashboard-feed use case. Writes are server-only: services/middleware
+// writes via the Admin SDK, which authenticates with the service account
+// key and always bypasses these rules entirely, regardless of what they
+// say - the `allow write: if false` below is what stops any OTHER client
+// (e.g. a browser using the public web config) from writing directly.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /live_feed/{eventId} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

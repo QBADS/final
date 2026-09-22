@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import type { LiveFeedEvent } from "@qbads/types";
-import { dashboardEventSourceUrl } from "./apiClient";
+import { db } from "./firebase";
+
+// Firestore query window before the client-side institution filter below -
+// wider than `max` since only a fraction of the most recent events across
+// ALL institutions will belong to this one.
+const LIVE_FEED_QUERY_WINDOW = 50;
 
 /** Polls `fetchFn` on an interval, keeping the last known value on a transient failure. */
 export function usePoll<T>(fetchFn: () => Promise<T>, intervalMs: number, initial: T): T {
@@ -29,30 +35,30 @@ export function usePoll<T>(fetchFn: () => Promise<T>, intervalMs: number, initia
   return data;
 }
 
-/** Subscribes to Middleware's SSE live feed, filtered to one institution's own events. */
+/**
+ * Real-time live feed, read directly from Firestore (populated by
+ * services/middleware's integrations/firebaseClient.ts) rather than
+ * Middleware's SSE endpoint, filtered to one institution's own events -
+ * see services/middleware/firestore.rules for the read-only security rule
+ * this depends on.
+ */
 export function useLiveFeed(institutionName: string | null, max = 8): LiveFeedEvent[] {
   const [events, setEvents] = useState<LiveFeedEvent[]>([]);
 
   useEffect(() => {
     if (!institutionName) return;
-    let cancelled = false;
-    let source: EventSource | undefined;
-    // The Dashboard API's live-feed SSE endpoint requires a session token;
-    // EventSource can't set an Authorization header, so it goes as ?token=
-    // (dashboardEventSourceUrl - see auth/dashboardAuth.ts).
-    void dashboardEventSourceUrl("/api/dashboard/live-feed").then((url) => {
-      if (cancelled) return;
-      source = new EventSource(url);
-      source.onmessage = (msg) => {
-        const event = JSON.parse(msg.data) as LiveFeedEvent;
-        if (event.institutionName !== institutionName) return;
-        setEvents((prev) => [event, ...prev].slice(0, max));
-      };
-    });
-    return () => {
-      cancelled = true;
-      source?.close();
-    };
+    const q = query(collection(db, "live_feed"), orderBy("occurredAt", "desc"), limit(LIVE_FEED_QUERY_WINDOW));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const mine = snapshot.docs.map((doc) => doc.data() as LiveFeedEvent).filter((e) => e.institutionName === institutionName);
+        setEvents(mine.slice(0, max));
+      },
+      (err) => {
+        console.warn("[useLiveFeed] Firestore listener error", err);
+      },
+    );
+    return () => unsubscribe();
   }, [institutionName, max]);
 
   return events;

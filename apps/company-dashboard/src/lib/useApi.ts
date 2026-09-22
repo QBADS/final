@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { LiveFeedEvent } from "@qbads/types";
-import { dashboardEventSourceUrl } from "./apiClient";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
+import type { LiveFeedEvent, TickerItem } from "@qbads/types";
+import { db } from "./firebase";
 
 /**
  * Polls `fetchFn` on an interval, keeping the last known value on a
@@ -35,29 +36,50 @@ export function usePoll<T>(fetchFn: () => Promise<T>, intervalMs: number, initia
   return data;
 }
 
-/** Subscribes to Middleware's SSE live feed (GET /api/dashboard/live-feed). */
+/**
+ * Real-time live feed, read directly from Firestore (populated by
+ * services/middleware's integrations/firebaseClient.ts) rather than
+ * Middleware's SSE endpoint - see the implementation notes for why live
+ * feed/ticker specifically were chosen for this, and
+ * services/middleware/firestore.rules for the read-only security rule
+ * this depends on.
+ */
 export function useLiveFeed(max = 8): LiveFeedEvent[] {
   const [events, setEvents] = useState<LiveFeedEvent[]>([]);
 
   useEffect(() => {
-    let cancelled = false;
-    let source: EventSource | undefined;
-    // The Dashboard API's live-feed SSE endpoint requires a session token;
-    // EventSource can't set an Authorization header, so it goes as ?token=
-    // (dashboardEventSourceUrl - see auth/dashboardAuth.ts).
-    void dashboardEventSourceUrl("/api/dashboard/live-feed").then((url) => {
-      if (cancelled) return;
-      source = new EventSource(url);
-      source.onmessage = (msg) => {
-        const event = JSON.parse(msg.data) as LiveFeedEvent;
-        setEvents((prev) => [event, ...prev].slice(0, max));
-      };
-    });
-    return () => {
-      cancelled = true;
-      source?.close();
-    };
+    const q = query(collection(db, "live_feed"), orderBy("occurredAt", "desc"), limit(max));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setEvents(snapshot.docs.map((doc) => doc.data() as LiveFeedEvent));
+      },
+      (err) => {
+        // keep the last known value - same "deterministic under failure"
+        // stance as usePoll's catch block below
+        console.warn("[useLiveFeed] Firestore listener error", err);
+      },
+    );
+    return () => unsubscribe();
   }, [max]);
 
   return events;
+}
+
+/**
+ * Ticker bar, derived from the same Firestore live-feed stream -
+ * reproduces the exact severity/message format Middleware's own
+ * GET /api/dashboard/ticker uses, but pushed in real time instead of
+ * polled. Does not include the offline-institution entries the REST
+ * ticker endpoint adds (that's institution-health data, not a live
+ * transaction event) - fetchTicker/GET /api/dashboard/ticker still exists
+ * if that's needed again later.
+ */
+export function useFirestoreTicker(max = 6): TickerItem[] {
+  const events = useLiveFeed(max);
+  return events.map((event) => ({
+    id: event.id,
+    severity: event.riskLevel === "high" ? "bad" : event.riskLevel === "medium" ? "warn" : "ok",
+    message: `${event.transactionId} · ${event.institutionName} · risk ${event.riskScore.toFixed(0)} (${event.chainStatus})`,
+  }));
 }

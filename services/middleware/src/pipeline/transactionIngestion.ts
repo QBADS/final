@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { store } from "../store/inMemoryStore";
 import { runFraudDetectionPipeline, type PipelineOutcome } from "./decisionEngine";
 import { recordDecisionOnChain, recordTransactionOnChain } from "../integrations/blockchainClient";
+import { publishLiveFeedEvent } from "../integrations/firebaseClient";
 import type { StoredTransaction } from "../domainTypes";
 
 /**
@@ -39,15 +40,19 @@ export async function processIngestedTransaction(txId: string, rawBody: Record<s
   }
 
   const institution = store.institutions.get(record.institutionId);
-  store.pushLiveFeedEvent({
+  const liveFeedEvent = {
     id: randomUUID(),
     transactionId: txId,
     institutionName: institution?.name ?? record.institutionId,
-    chainStatus: "pending",
+    chainStatus: "pending" as const,
     riskLevel: outcome.decision.riskLevel,
     riskScore: outcome.decision.riskScore,
     occurredAt: outcome.decision.decidedAt,
-  });
+  };
+  store.pushLiveFeedEvent(liveFeedEvent);
+  // Fire-and-forget, same best-effort contract as the blockchain write
+  // below - see integrations/firebaseClient.ts.
+  void publishLiveFeedEvent(liveFeedEvent);
 
   // Fire-and-forget: a slow or unreachable blockchain gateway must never
   // add latency to the pipeline result the Node API is waiting on (see

@@ -16,3 +16,6 @@ services/middleware/data/
 .env.*
 !.env.example
 !**/.env.example
+
+# Firebase Admin SDK service account key - a live credential, never commit.
+services/middleware/firebase-service-account.json

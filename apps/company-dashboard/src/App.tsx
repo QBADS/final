@@ -1,8 +1,8 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar, TickerBar, TopBar } from "@qbads/ui";
 import { companyNavGroups } from "./lib/nav";
-import { fetchFraudStats, fetchKpis, fetchTicker, fetchTransactions } from "./lib/apiClient";
-import { usePoll } from "./lib/useApi";
+import { fetchFraudStats, fetchKpis, fetchTransactions } from "./lib/apiClient";
+import { useFirestoreTicker, usePoll } from "./lib/useApi";
 import { EMPTY_FRAUD_STATS, EMPTY_KPIS } from "./lib/emptyState";
 
 const routeTitles: Record<string, { title: string; path: string }> = {
@@ -30,7 +30,7 @@ export default function App() {
   const location = useLocation();
   const fraudStats = usePoll(fetchFraudStats, 4000, EMPTY_FRAUD_STATS);
   const kpis = usePoll(fetchKpis, 4000, EMPTY_KPIS);
-  const ticker = usePoll(fetchTicker, 5000, [] as Awaited<ReturnType<typeof fetchTicker>>);
+  const ticker = useFirestoreTicker(6);
   const reviewCases = usePoll(() => fetchTransactions({ decision: "REVIEW" }), 6000, []);
   const route = routeTitles[location.pathname] ?? { title: "QBADS", path: "QBADS / Dashboard" };
 
